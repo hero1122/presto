@@ -20,12 +20,12 @@ import com.facebook.presto.hive.parquet.reader.ParquetReader;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.LazyBlock;
 import com.facebook.presto.spi.block.LazyBlockLoader;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.spi.type.DoubleType;
@@ -37,6 +37,7 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import io.airlift.units.DataSize;
 import org.apache.hadoop.fs.Path;
 import parquet.column.ColumnDescriptor;
 import parquet.schema.MessageType;
@@ -64,6 +65,7 @@ class ParquetPageSource
         implements ConnectorPageSource
 {
     private static final int MAX_VECTOR_LENGTH = 1024;
+    private static final long GUESSED_MEMORY_USAGE = new DataSize(16, DataSize.Unit.MEGABYTE).toBytes();
 
     private final ParquetReader parquetReader;
     private final MessageType requestedSchema;
@@ -198,6 +200,12 @@ class ParquetPageSource
     public boolean isFinished()
     {
         return closed;
+    }
+
+    @Override
+    public long getSystemMemoryUsage()
+    {
+        return GUESSED_MEMORY_USAGE;
     }
 
     @Override

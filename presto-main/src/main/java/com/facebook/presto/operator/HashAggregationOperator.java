@@ -24,6 +24,7 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import io.airlift.units.DataSize;
+import io.airlift.units.DataSize.Unit;
 
 import java.util.ArrayList;
 import java.util.Iterator;
@@ -91,7 +92,7 @@ public class HashAggregationOperator
             checkState(!closed, "Factory is already closed");
 
             OperatorContext operatorContext;
-            if (step == Step.PARTIAL) {
+            if (step.isOutputPartial()) {
                 operatorContext = driverContext.addOperatorContext(operatorId, HashAggregationOperator.class.getSimpleName(), maxPartialMemory);
             }
             else {
@@ -113,6 +114,21 @@ public class HashAggregationOperator
         public void close()
         {
             closed = true;
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new HashAggregationOperatorFactory(
+                    operatorId,
+                    groupByTypes,
+                    groupByChannels,
+                    step,
+                    accumulatorFactories,
+                    maskChannel,
+                    hashChannel,
+                    expectedGroups,
+                    new DataSize(maxPartialMemory, Unit.BYTE));
         }
     }
 
@@ -272,7 +288,7 @@ public class HashAggregationOperator
         {
             this.groupByHash = createGroupByHash(groupByTypes, Ints.toArray(groupByChannels), maskChannel, hashChannel, expectedGroups);
             this.operatorContext = operatorContext;
-            this.partial = (step == Step.PARTIAL);
+            this.partial = step.isOutputPartial();
 
             // wrapper each function with an aggregator
             ImmutableList.Builder<Aggregator> builder = ImmutableList.builder();
@@ -367,14 +383,14 @@ public class HashAggregationOperator
 
         private Aggregator(AccumulatorFactory accumulatorFactory, Step step)
         {
-            if (step == Step.FINAL) {
+            if (step.isInputRaw()) {
+                intermediateChannel = -1;
+                aggregation = accumulatorFactory.createGroupedAccumulator();
+            }
+            else {
                 checkArgument(accumulatorFactory.getInputChannels().size() == 1, "expected 1 input channel for intermediate aggregation");
                 intermediateChannel = accumulatorFactory.getInputChannels().get(0);
                 aggregation = accumulatorFactory.createGroupedIntermediateAccumulator();
-            }
-            else {
-                intermediateChannel = -1;
-                aggregation = accumulatorFactory.createGroupedAccumulator();
             }
             this.step = step;
         }
@@ -386,7 +402,7 @@ public class HashAggregationOperator
 
         public Type getType()
         {
-            if (step == Step.PARTIAL) {
+            if (step.isOutputPartial()) {
                 return aggregation.getIntermediateType();
             }
             else {
@@ -396,17 +412,17 @@ public class HashAggregationOperator
 
         public void processPage(GroupByIdBlock groupIds, Page page)
         {
-            if (step == Step.FINAL) {
-                aggregation.addIntermediate(groupIds, page.getBlock(intermediateChannel));
+            if (step.isInputRaw()) {
+                aggregation.addInput(groupIds, page);
             }
             else {
-                aggregation.addInput(groupIds, page);
+                aggregation.addIntermediate(groupIds, page.getBlock(intermediateChannel));
             }
         }
 
         public void evaluate(int groupId, BlockBuilder output)
         {
-            if (step == Step.PARTIAL) {
+            if (step.isOutputPartial()) {
                 aggregation.evaluateIntermediate(groupId, output);
             }
             else {

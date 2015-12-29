@@ -30,8 +30,6 @@ import org.testng.annotations.Test;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.block.BlockSerdeUtil.writeBlock;
-import static com.facebook.presto.spi.StandardErrorCode.FUNCTION_IMPLEMENTATION_MISSING;
-import static com.facebook.presto.spi.StandardErrorCode.FUNCTION_NOT_FOUND;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -40,6 +38,8 @@ import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.sql.analyzer.SemanticErrorCode.FUNCTION_NOT_FOUND;
+import static com.facebook.presto.sql.analyzer.SemanticErrorCode.TYPE_MISMATCH;
 import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.facebook.presto.util.StructuralTestUtil.arrayBlockOf;
@@ -85,6 +85,7 @@ public class TestArrayOperators
     public void testArrayElements()
             throws Exception
     {
+        assertFunction("CAST(ARRAY [null] AS ARRAY<BIGINT>)", new ArrayType(BIGINT), asList((Long) null));
         assertFunction("CAST(ARRAY [1, 2, 3] AS ARRAY<BIGINT>)", new ArrayType(BIGINT), ImmutableList.of(1L, 2L, 3L));
         assertFunction("CAST(ARRAY [1, null, 3] AS ARRAY<BIGINT>)", new ArrayType(BIGINT), asList(1L, null, 3L));
 
@@ -100,8 +101,8 @@ public class TestArrayOperators
 
         assertFunction("CAST(ARRAY [ARRAY[1], ARRAY[2, 3]] AS ARRAY<ARRAY<DOUBLE>>)", new ArrayType(new ArrayType(DOUBLE)), asList(asList(1.0), asList(2.0, 3.0)));
 
-        assertInvalidFunction("CAST(ARRAY [1, null, 3] AS ARRAY<TIMESTAMP>)", FUNCTION_IMPLEMENTATION_MISSING);
-        assertInvalidFunction("CAST(ARRAY [1, null, 3] AS ARRAY<ARRAY<TIMESTAMP>>)", FUNCTION_IMPLEMENTATION_MISSING);
+        assertInvalidFunction("CAST(ARRAY [1, null, 3] AS ARRAY<TIMESTAMP>)", TYPE_MISMATCH);
+        assertInvalidFunction("CAST(ARRAY [1, null, 3] AS ARRAY<ARRAY<TIMESTAMP>>)", TYPE_MISMATCH);
         assertInvalidFunction("CAST(ARRAY ['puppies', 'kittens'] AS ARRAY<BIGINT>)", INVALID_CAST_ARGUMENT);
     }
 
@@ -183,10 +184,13 @@ public class TestArrayOperators
         assertFunction("ARRAY [1] || ARRAY [2.0] || ARRAY [3] || ARRAY [4.0]", new ArrayType(DOUBLE), ImmutableList.of(1.0, 2.0, 3.0, 4.0));
         assertFunction("ARRAY [ARRAY [1], ARRAY [2, 8]] || ARRAY [ARRAY [3, 6], ARRAY [4]]", new ArrayType(new ArrayType(BIGINT)), ImmutableList.of(ImmutableList.of(1L), ImmutableList.of(2L, 8L), ImmutableList.of(3L, 6L), ImmutableList.of(4L)));
 
-        assertInvalidFunction("ARRAY [ARRAY[1]] || ARRAY[ARRAY[true], ARRAY[false]]", FUNCTION_NOT_FOUND.toErrorCode());
+        assertInvalidFunction("ARRAY [ARRAY[1]] || ARRAY[ARRAY[true], ARRAY[false]]", FUNCTION_NOT_FOUND);
+
+        // This query is ambiguous. The result can be [[1], NULL] or [[1], [NULL]] depending on interpretation
+        assertFunction("ARRAY [ARRAY [1]] || ARRAY [NULL]", new ArrayType(new ArrayType(BIGINT)), asList(ImmutableList.of(1L), null));
 
         try {
-            assertFunction("ARRAY [ARRAY[1]] || ARRAY[NULL]", new ArrayType(new ArrayType(BIGINT)), null);
+            assertFunction("ARRAY [ARRAY [1]] || ARRAY [ARRAY ['x']]", new ArrayType(new ArrayType(BIGINT)), null);
             fail("arrays must be of the same type");
         }
         catch (RuntimeException e) {
@@ -214,6 +218,14 @@ public class TestArrayOperators
                 sqlTimestamp(100_000), sqlTimestamp(1000)));
         assertFunction("ARRAY [2, 8] || ARRAY[ARRAY[3, 6], ARRAY[4]]", new ArrayType(new ArrayType(BIGINT)), ImmutableList.of(ImmutableList.of(2L, 8L), ImmutableList.of(3L, 6L), ImmutableList.of(4L)));
         assertFunction("ARRAY [ARRAY [1], ARRAY [2, 8]] || ARRAY [3, 6]", new ArrayType(new ArrayType(BIGINT)), ImmutableList.of(ImmutableList.of(1L), ImmutableList.of(2L, 8L), ImmutableList.of(3L, 6L)));
+
+        try {
+            assertFunction("ARRAY [ARRAY[1]] || ARRAY ['x']", new ArrayType(new ArrayType(BIGINT)), null);
+            fail("arrays must be of the same type");
+        }
+        catch (RuntimeException e) {
+            // Expected
+        }
     }
 
     @Test
@@ -235,6 +247,7 @@ public class TestArrayOperators
         assertFunction("CONTAINS(ARRAY [ARRAY [1, 2], ARRAY [3, 4]], ARRAY [3])", BOOLEAN, false);
         assertFunction("CONTAINS(ARRAY [CAST (NULL AS BIGINT)], 1)", BOOLEAN, null);
         assertFunction("CONTAINS(ARRAY [CAST (NULL AS BIGINT)], NULL)", BOOLEAN, null);
+        assertFunction("CONTAINS(ARRAY [], NULL)", BOOLEAN, null);
     }
 
     @Test
@@ -355,7 +368,7 @@ public class TestArrayOperators
             fail("Access to array with double subscript should fail");
         }
         catch (SemanticException e) {
-            assertTrue(e.getCode() == SemanticErrorCode.TYPE_MISMATCH);
+            assertTrue(e.getCode() == TYPE_MISMATCH);
         }
 
         assertFunction("ARRAY[NULL][1]", UNKNOWN, null);
@@ -439,7 +452,7 @@ public class TestArrayOperators
                 new ArrayType(new ArrayType(BIGINT)),
                 ImmutableList.of(ImmutableList.of(1L), ImmutableList.of(2L)));
 
-        assertInvalidFunction("ARRAY_SORT(ARRAY[color('red'), color('blue')])", FUNCTION_NOT_FOUND.toErrorCode());
+        assertInvalidFunction("ARRAY_SORT(ARRAY[color('red'), color('blue')])", FUNCTION_NOT_FOUND);
     }
 
     @Test void testDistinct()
@@ -689,6 +702,17 @@ public class TestArrayOperators
         assertFunction("ARRAY_REMOVE(ARRAY [TRUE, FALSE, TRUE], FALSE)", new ArrayType(BOOLEAN), ImmutableList.of(true, true));
         assertFunction("ARRAY_REMOVE(ARRAY [NULL, FALSE, TRUE], TRUE)", new ArrayType(BOOLEAN), asList(null, false));
         assertFunction("ARRAY_REMOVE(ARRAY [ARRAY ['foo'], ARRAY ['bar'], ARRAY ['baz']], ARRAY ['bar'])", new ArrayType(new ArrayType(VARCHAR)), ImmutableList.of(ImmutableList.of("foo"), ImmutableList.of("baz")));
+    }
+
+    public void assertInvalidFunction(String projection, SemanticErrorCode errorCode)
+    {
+        try {
+            assertFunction(projection, UNKNOWN, null);
+            fail("Expected error " + errorCode + " from " + projection);
+        }
+        catch (SemanticException e) {
+            assertEquals(e.getCode(), errorCode);
+        }
     }
 
     public void assertInvalidFunction(String projection, ErrorCode errorCode)

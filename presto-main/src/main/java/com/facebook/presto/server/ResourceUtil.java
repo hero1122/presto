@@ -15,6 +15,7 @@ package com.facebook.presto.server;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.Session.SessionBuilder;
+import com.facebook.presto.execution.QueryId;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.spi.security.AccessDeniedException;
@@ -22,6 +23,7 @@ import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.spi.type.TimeZoneNotSupportedException;
+import com.facebook.presto.transaction.TransactionId;
 import com.google.common.base.Splitter;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -50,6 +52,7 @@ import static com.facebook.presto.client.PrestoHeaders.PRESTO_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SESSION;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SOURCE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_TIME_ZONE;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_TRANSACTION_ID;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_USER;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Strings.emptyToNull;
@@ -63,7 +66,7 @@ final class ResourceUtil
     {
     }
 
-    public static Session createSessionForRequest(HttpServletRequest servletRequest, AccessControl accessControl, SessionPropertyManager sessionPropertyManager)
+    public static Session createSessionForRequest(HttpServletRequest servletRequest, AccessControl accessControl, SessionPropertyManager sessionPropertyManager, QueryId queryId)
     {
         String catalog = trimEmptyToNull(servletRequest.getHeader(PRESTO_CATALOG));
         String schema = trimEmptyToNull(servletRequest.getHeader(PRESTO_SCHEMA));
@@ -82,12 +85,19 @@ final class ResourceUtil
 
         Identity identity = new Identity(user, Optional.ofNullable(principal));
         SessionBuilder sessionBuilder = Session.builder(sessionPropertyManager)
+                .setQueryId(queryId)
                 .setIdentity(identity)
                 .setSource(servletRequest.getHeader(PRESTO_SOURCE))
                 .setCatalog(catalog)
                 .setSchema(schema)
                 .setRemoteUserAddress(servletRequest.getRemoteAddr())
                 .setUserAgent(servletRequest.getHeader(USER_AGENT));
+
+        String transactionId = trimEmptyToNull(servletRequest.getHeader(PRESTO_TRANSACTION_ID));
+        if (transactionId != null) {
+            sessionBuilder.setClientTransactionSupport();
+            getTransactionId(transactionId).ifPresent(sessionBuilder::setTransactionId);
+        }
 
         String timeZoneId = servletRequest.getHeader(PRESTO_TIME_ZONE);
         if (timeZoneId != null) {
@@ -199,6 +209,19 @@ final class ResourceUtil
             return TimeZoneKey.getTimeZoneKey(timeZoneId);
         }
         catch (TimeZoneNotSupportedException e) {
+            throw badRequest(e.getMessage());
+        }
+    }
+
+    private static Optional<TransactionId> getTransactionId(String transactionId)
+    {
+        if (transactionId.toUpperCase().equals("NONE")) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(TransactionId.valueOf(transactionId));
+        }
+        catch (Exception e) {
             throw badRequest(e.getMessage());
         }
     }

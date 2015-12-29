@@ -20,6 +20,7 @@ import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.VarbinaryType;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.ExpressionInterpreter;
 import com.facebook.presto.sql.planner.Symbol;
@@ -62,7 +63,7 @@ import static com.facebook.presto.sql.ExpressionFormatter.formatExpression;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.sql.planner.ExpressionInterpreter.expressionInterpreter;
 import static com.facebook.presto.sql.planner.ExpressionInterpreter.expressionOptimizer;
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static io.airlift.slice.Slices.utf8Slice;
 import static java.util.Locale.ENGLISH;
 import static org.testng.Assert.assertEquals;
 
@@ -71,6 +72,7 @@ public class TestExpressionInterpreter
     private static final Map<Symbol, Type> SYMBOL_TYPES = ImmutableMap.<Symbol, Type>builder()
             .put(new Symbol("bound_long"), BIGINT)
             .put(new Symbol("bound_string"), VARCHAR)
+            .put(new Symbol("bound_varbinary"), VarbinaryType.VARBINARY)
             .put(new Symbol("bound_double"), DOUBLE)
             .put(new Symbol("bound_boolean"), BOOLEAN)
             .put(new Symbol("bound_date"), DATE)
@@ -158,6 +160,9 @@ public class TestExpressionInterpreter
         assertOptimizedEquals("bound_long = unbound_long", "1234 = unbound_long");
 
         assertOptimizedEquals("10151082135029368 = 10151082135029369", "false");
+
+        assertOptimizedEquals("bound_varbinary = X'a b'", "true");
+        assertOptimizedEquals("bound_varbinary = X'a d'", "false");
     }
 
     @Test
@@ -962,6 +967,8 @@ public class TestExpressionInterpreter
 
         optimize("interval '3' day * unbound_long");
         optimize("interval '3' year * unbound_long");
+
+        assertEquals(optimize("X'1234'"), Slices.wrappedBuffer((byte) 0x12, (byte) 0x34));
     }
 
     private static void assertLike(byte[] value, String pattern, boolean expected)
@@ -975,7 +982,7 @@ public class TestExpressionInterpreter
 
     private static StringLiteral rawStringLiteral(final Slice slice)
     {
-        return new StringLiteral(slice.toString(UTF_8))
+        return new StringLiteral(slice.toStringUtf8())
         {
             @Override
             public Slice getSlice()
@@ -1022,7 +1029,7 @@ public class TestExpressionInterpreter
                     case "bound_long":
                         return 1234L;
                     case "bound_string":
-                        return Slices.wrappedBuffer("hello".getBytes(UTF_8));
+                        return utf8Slice("hello");
                     case "bound_double":
                         return 12.34;
                     case "bound_date":
@@ -1032,9 +1039,11 @@ public class TestExpressionInterpreter
                     case "bound_timestamp":
                         return new DateTime(2001, 8, 22, 3, 4, 5, 321, DateTimeZone.UTC).getMillis();
                     case "bound_pattern":
-                        return Slices.wrappedBuffer("%el%".getBytes(UTF_8));
+                        return utf8Slice("%el%");
                     case "bound_timestamp_with_timezone":
                         return new SqlTimestampWithTimeZone(new DateTime(1970, 1, 1, 1, 0, 0, 999, DateTimeZone.UTC).getMillis(), getTimeZoneKey("Z"));
+                    case "bound_varbinary":
+                        return Slices.wrappedBuffer((byte) 0xab);
                 }
 
                 return new QualifiedNameReference(symbol.toQualifiedName());

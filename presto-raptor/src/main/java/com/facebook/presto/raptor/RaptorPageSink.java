@@ -57,6 +57,7 @@ public class RaptorPageSink
             PageSorter pageSorter,
             StorageManager storageManager,
             JsonCodec<ShardInfo> shardInfoCodec,
+            long transactionId,
             List<Long> columnIds,
             List<Type> columnTypes,
             Optional<Long> sampleWeightColumnId,
@@ -68,7 +69,7 @@ public class RaptorPageSink
         this.columnTypes = ImmutableList.copyOf(requireNonNull(columnTypes, "columnTypes is null"));
 
         requireNonNull(storageManager, "storageManager is null");
-        this.storagePageSink = storageManager.createStoragePageSink(columnIds, columnTypes);
+        this.storagePageSink = storageManager.createStoragePageSink(transactionId, columnIds, columnTypes);
         this.shardInfoCodec = requireNonNull(shardInfoCodec, "shardInfoCodec is null");
 
         requireNonNull(sampleWeightColumnId, "sampleWeightColumnId is null");
@@ -98,7 +99,7 @@ public class RaptorPageSink
     }
 
     @Override
-    public Collection<Slice> commit()
+    public Collection<Slice> finish()
     {
         flushPages(pageBuffer.getPages());
         List<ShardInfo> shards = storagePageSink.commit();
@@ -111,10 +112,9 @@ public class RaptorPageSink
     }
 
     @Override
-    public void rollback()
+    public void abort()
     {
         storagePageSink.rollback();
-        // TODO: clean up any written files
     }
 
     /**

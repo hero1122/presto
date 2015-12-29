@@ -14,7 +14,6 @@
 package com.facebook.presto.tests;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.index.IndexManager;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.security.AccessDeniedException;
 import com.facebook.presto.spi.type.Type;
@@ -34,7 +33,9 @@ import org.intellij.lang.annotations.Language;
 import org.testng.annotations.AfterClass;
 
 import java.util.List;
+import java.util.OptionalLong;
 
+import static com.facebook.presto.transaction.TransactionBuilder.transaction;
 import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
@@ -53,7 +54,7 @@ public abstract class AbstractTestQueryFramework
     }
 
     @AfterClass(alwaysRun = true)
-    private void close()
+    public void close()
             throws Exception
     {
         try {
@@ -93,25 +94,25 @@ public abstract class AbstractTestQueryFramework
     protected void assertQuery(Session session, @Language("SQL") String sql)
             throws Exception
     {
-        QueryAssertions.assertQuery(queryRunner, session, sql, h2QueryRunner, sql, false);
+        QueryAssertions.assertQuery(queryRunner, session, sql, h2QueryRunner, sql, false, false);
     }
 
     public void assertQueryOrdered(@Language("SQL") String sql)
             throws Exception
     {
-        QueryAssertions.assertQuery(queryRunner, getSession(), sql, h2QueryRunner, sql, true);
+        QueryAssertions.assertQuery(queryRunner, getSession(), sql, h2QueryRunner, sql, true, false);
     }
 
     protected void assertQuery(@Language("SQL") String actual, @Language("SQL") String expected)
             throws Exception
     {
-        QueryAssertions.assertQuery(queryRunner, getSession(), actual, h2QueryRunner, expected, false);
+        QueryAssertions.assertQuery(queryRunner, getSession(), actual, h2QueryRunner, expected, false, false);
     }
 
     protected void assertQuery(Session session, @Language("SQL") String actual, @Language("SQL") String expected)
             throws Exception
     {
-        QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false);
+        QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false, false);
     }
 
     protected void assertQueryOrdered(@Language("SQL") String actual, @Language("SQL") String expected)
@@ -123,13 +124,39 @@ public abstract class AbstractTestQueryFramework
     protected void assertQueryOrdered(Session session, @Language("SQL") String actual, @Language("SQL") String expected)
             throws Exception
     {
-        QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, true);
+        QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, true, false);
     }
 
-    protected void assertQueryTrue(@Language("SQL") String sql)
+    protected void assertUpdate(@Language("SQL") String actual, @Language("SQL") String expected)
             throws Exception
     {
-        assertQuery(sql, "SELECT true");
+        assertUpdate(getSession(), actual, expected);
+    }
+
+    protected void assertUpdate(Session session, @Language("SQL") String actual, @Language("SQL") String expected)
+            throws Exception
+    {
+        QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false, true);
+    }
+
+    protected void assertUpdate(@Language("SQL") String sql)
+    {
+        assertUpdate(getSession(), sql);
+    }
+
+    protected void assertUpdate(Session session, @Language("SQL") String sql)
+    {
+        QueryAssertions.assertUpdate(queryRunner, session, sql, OptionalLong.empty());
+    }
+
+    protected void assertUpdate(@Language("SQL") String sql, long count)
+    {
+        assertUpdate(getSession(), sql, count);
+    }
+
+    protected void assertUpdate(Session session, @Language("SQL") String sql, long count)
+    {
+        QueryAssertions.assertUpdate(queryRunner, session, sql, OptionalLong.of(count));
     }
 
     public void assertApproximateQuery(Session session, @Language("SQL") String actual, @Language("SQL") String expected)
@@ -205,27 +232,30 @@ public abstract class AbstractTestQueryFramework
 
     public Function<MaterializedRow, String> onlyColumnGetter()
     {
-        return new Function<MaterializedRow, String>()
-        {
-            @Override
-            public String apply(MaterializedRow input)
-            {
-                assertEquals(input.getFieldCount(), 1);
-                return (String) input.getField(0);
-            }
+        return input -> {
+            assertEquals(input.getFieldCount(), 1);
+            return (String) input.getField(0);
         };
     }
 
     public String getExplainPlan(String query, ExplainType.Type planType)
     {
         QueryExplainer explainer = getQueryExplainer();
-        return explainer.getPlan(queryRunner.getDefaultSession(), sqlParser.createStatement(query), planType);
+        return transaction(queryRunner.getTransactionManager())
+                .singleStatement()
+                .execute(queryRunner.getDefaultSession(), session -> {
+                    return explainer.getPlan(session, sqlParser.createStatement(query), planType);
+                });
     }
 
     public String getGraphvizExplainPlan(String query, ExplainType.Type planType)
     {
         QueryExplainer explainer = getQueryExplainer();
-        return explainer.getGraphvizPlan(queryRunner.getDefaultSession(), sqlParser.createStatement(query), planType);
+        return transaction(queryRunner.getTransactionManager())
+                .singleStatement()
+                .execute(queryRunner.getDefaultSession(), session -> {
+                    return explainer.getGraphvizPlan(session, sqlParser.createStatement(query), planType);
+                });
     }
 
     private QueryExplainer getQueryExplainer()
@@ -233,7 +263,7 @@ public abstract class AbstractTestQueryFramework
         Metadata metadata = queryRunner.getMetadata();
         FeaturesConfig featuresConfig = new FeaturesConfig().setExperimentalSyntaxEnabled(true).setOptimizeHashGeneration(true);
         boolean forceSingleNode = queryRunner.getNodeCount() == 1;
-        List<PlanOptimizer> optimizers = new PlanOptimizersFactory(metadata, sqlParser, new IndexManager(), featuresConfig, forceSingleNode).get();
+        List<PlanOptimizer> optimizers = new PlanOptimizersFactory(metadata, sqlParser, featuresConfig, forceSingleNode).get();
         return new QueryExplainer(
                 optimizers,
                 metadata,

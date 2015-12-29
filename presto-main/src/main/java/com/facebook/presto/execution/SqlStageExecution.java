@@ -16,6 +16,7 @@ package com.facebook.presto.execution;
 import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.Session;
 import com.facebook.presto.execution.StateMachine.StateChangeListener;
+import com.facebook.presto.metadata.RemoteTransactionHandle;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.PrestoException;
@@ -25,6 +26,7 @@ import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
+import com.facebook.presto.transaction.TransactionHandle;
 import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -230,6 +232,8 @@ public final class SqlStageExecution
                 return;
             }
 
+            currentOutputBuffers.checkValidTransition(outputBuffers);
+
             if (this.outputBuffers.compareAndSet(currentOutputBuffers, outputBuffers)) {
                 for (RemoteTask task : getAllTasks()) {
                     task.setOutputBuffers(outputBuffers);
@@ -267,14 +271,14 @@ public final class SqlStageExecution
         return firstCompletedFuture(stateChangeFutures, true);
     }
 
-    public synchronized RemoteTask scheduleTask(Node node)
+    public synchronized RemoteTask scheduleTask(Node node, int partition)
     {
         requireNonNull(node, "node is null");
 
-        return scheduleTask(node, null, ImmutableList.<Split>of());
+        return scheduleTask(node, partition, null, ImmutableList.<Split>of());
     }
 
-    public synchronized Set<RemoteTask> scheduleSplits(Node node, Iterable<Split> splits)
+    public synchronized Set<RemoteTask> scheduleSplits(Node node, int partition, Iterable<Split> splits)
     {
         requireNonNull(node, "node is null");
         requireNonNull(splits, "splits is null");
@@ -285,7 +289,7 @@ public final class SqlStageExecution
         ImmutableSet.Builder<RemoteTask> newTasks = ImmutableSet.builder();
         Collection<RemoteTask> tasks = this.tasks.get(node);
         if (tasks == null) {
-            newTasks.add(scheduleTask(node, partitionedSource, splits));
+            newTasks.add(scheduleTask(node, partition, partitionedSource, splits));
         }
         else {
             RemoteTask task = tasks.iterator().next();
@@ -294,7 +298,7 @@ public final class SqlStageExecution
         return newTasks.build();
     }
 
-    private synchronized RemoteTask scheduleTask(Node node, PlanNodeId sourceId, Iterable<Split> sourceSplits)
+    private synchronized RemoteTask scheduleTask(Node node, int partition, PlanNodeId sourceId, Iterable<Split> sourceSplits)
     {
         TaskId taskId = new TaskId(stateMachine.getStageId(), String.valueOf(nextTaskId.getAndIncrement()));
 
@@ -310,10 +314,11 @@ public final class SqlStageExecution
                 stateMachine.getSession(),
                 taskId,
                 node,
+                partition,
                 stateMachine.getFragment(),
                 initialSplits.build(),
                 outputBuffers.get(),
-                nodeTaskMap.getSplitCountChangeListener(node));
+                nodeTaskMap.createPartitionedSplitCountTracker(node, taskId));
 
         completeSources.forEach(task::noMoreSplits);
 
@@ -358,10 +363,15 @@ public final class SqlStageExecution
         }
         else {
             // stage finished while we were scheduling this task
-            task.cancel();
+            task.abort();
         }
 
         return task;
+    }
+
+    public Set<Node> getScheduledNodes()
+    {
+        return ImmutableSet.copyOf(tasks.keySet());
     }
 
     public void recordGetSplitTime(long start)
@@ -372,7 +382,7 @@ public final class SqlStageExecution
     private static Split createRemoteSplitFor(TaskId taskId, URI taskLocation)
     {
         URI splitLocation = uriBuilderFrom(taskLocation).appendPath("results").appendPath(taskId.toString()).build();
-        return new Split("remote", new RemoteSplit(splitLocation));
+        return new Split("remote", new TransactionHandle("remote", new RemoteTransactionHandle()), new RemoteSplit(splitLocation));
     }
 
     @Override

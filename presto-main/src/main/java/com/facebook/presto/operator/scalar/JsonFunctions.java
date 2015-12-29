@@ -50,7 +50,6 @@ import static com.fasterxml.jackson.core.JsonToken.VALUE_TRUE;
 import static com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS;
 import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.String.format;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 public final class JsonFunctions
 {
@@ -86,7 +85,7 @@ public final class JsonFunctions
     @SqlType(JsonPathType.NAME)
     public static JsonPath castToJsonPath(@SqlType(StandardTypes.VARCHAR) Slice pattern)
     {
-        return new JsonPath(pattern.toString(UTF_8));
+        return new JsonPath(pattern.toStringUtf8());
     }
 
     @ScalarFunction
@@ -124,7 +123,7 @@ public final class JsonFunctions
     @SqlType(StandardTypes.BIGINT)
     public static Long jsonArrayLength(@SqlType(StandardTypes.JSON) Slice json)
     {
-        try (JsonParser parser = JSON_FACTORY.createJsonParser(json.getInput())) {
+        try (JsonParser parser = JSON_FACTORY.createParser(json.getInput())) {
             if (parser.nextToken() != START_ARRAY) {
                 return null;
             }
@@ -161,7 +160,7 @@ public final class JsonFunctions
     @SqlType(StandardTypes.BOOLEAN)
     public static Boolean jsonArrayContains(@SqlType(StandardTypes.JSON) Slice json, @SqlType(StandardTypes.BOOLEAN) boolean value)
     {
-        try (JsonParser parser = JSON_FACTORY.createJsonParser(json.getInput())) {
+        try (JsonParser parser = JSON_FACTORY.createParser(json.getInput())) {
             if (parser.nextToken() != START_ARRAY) {
                 return null;
             }
@@ -200,7 +199,7 @@ public final class JsonFunctions
     @SqlType(StandardTypes.BOOLEAN)
     public static Boolean jsonArrayContains(@SqlType(StandardTypes.JSON) Slice json, @SqlType(StandardTypes.BIGINT) long value)
     {
-        try (JsonParser parser = JSON_FACTORY.createJsonParser(json.getInput())) {
+        try (JsonParser parser = JSON_FACTORY.createParser(json.getInput())) {
             if (parser.nextToken() != START_ARRAY) {
                 return null;
             }
@@ -244,7 +243,7 @@ public final class JsonFunctions
             return false;
         }
 
-        try (JsonParser parser = JSON_FACTORY.createJsonParser(json.getInput())) {
+        try (JsonParser parser = JSON_FACTORY.createParser(json.getInput())) {
             if (parser.nextToken() != START_ARRAY) {
                 return null;
             }
@@ -284,9 +283,9 @@ public final class JsonFunctions
     @SqlType(StandardTypes.BOOLEAN)
     public static Boolean jsonArrayContains(@SqlType(StandardTypes.JSON) Slice json, @SqlType(StandardTypes.VARCHAR) Slice value)
     {
-        String valueString = value.toString(UTF_8);
+        String valueString = value.toStringUtf8();
 
-        try (JsonParser parser = JSON_FACTORY.createJsonParser(json.getInput())) {
+        try (JsonParser parser = JSON_FACTORY.createParser(json.getInput())) {
             if (parser.nextToken() != START_ARRAY) {
                 return null;
             }
@@ -324,7 +323,7 @@ public final class JsonFunctions
     @SqlType(StandardTypes.JSON)
     public static Slice jsonArrayGet(@SqlType(StandardTypes.JSON) Slice json, @SqlType(StandardTypes.BIGINT) long index)
     {
-        try (JsonParser parser = MAPPING_JSON_FACTORY.createJsonParser(json.getInput())) {
+        try (JsonParser parser = MAPPING_JSON_FACTORY.createParser(json.getInput())) {
             if (parser.nextToken() != START_ARRAY) {
                 return null;
             }

@@ -19,6 +19,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
@@ -26,6 +27,7 @@ import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.emptyMap;
 
+@Deprecated
 public interface ConnectorMetadata
 {
     /**
@@ -211,7 +213,7 @@ public interface ConnectorMetadata
     /**
      * Commit delete query
      *
-     * @param fragments all fragments returned by {@link com.facebook.presto.spi.UpdatablePageSource#commit()}
+     * @param fragments all fragments returned by {@link com.facebook.presto.spi.UpdatablePageSource#finish()}
      */
     default void commitDelete(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
     {
@@ -253,5 +255,22 @@ public interface ConnectorMetadata
     default Map<SchemaTableName, ConnectorViewDefinition> getViews(ConnectorSession session, SchemaTablePrefix prefix)
     {
         return emptyMap();
+    }
+
+    /**
+     * @return whether delete without table scan is supported
+     */
+    default boolean supportsMetadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle, ConnectorTableLayoutHandle tableLayoutHandle)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support deletes");
+    }
+
+    /**
+     * Delete the provided table layout
+     * @return number of rows deleted, or null for unknown
+     */
+    default OptionalLong metadataDelete(ConnectorSession session, ConnectorTableHandle tableHandle, ConnectorTableLayoutHandle tableLayoutHandle)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support deletes");
     }
 }

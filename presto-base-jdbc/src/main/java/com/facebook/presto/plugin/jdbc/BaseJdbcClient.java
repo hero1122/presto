@@ -13,20 +13,15 @@
  */
 package com.facebook.presto.plugin.jdbc;
 
-import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
-import com.facebook.presto.spi.ConnectorPartition;
-import com.facebook.presto.spi.ConnectorPartitionResult;
 import com.facebook.presto.spi.ConnectorSplitSource;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.FixedSplitSource;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
-import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.base.Joiner;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -50,6 +45,7 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 
+import static com.facebook.presto.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -128,7 +124,7 @@ public class BaseJdbcClient
             return schemaNames.build();
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(JDBC_ERROR, e);
         }
     }
 
@@ -149,7 +145,7 @@ public class BaseJdbcClient
             }
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(JDBC_ERROR, e);
         }
     }
 
@@ -185,7 +181,7 @@ public class BaseJdbcClient
             }
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(JDBC_ERROR, e);
         }
     }
 
@@ -215,31 +211,22 @@ public class BaseJdbcClient
             }
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(JDBC_ERROR, e);
         }
     }
 
     @Override
-    public ConnectorPartitionResult getPartitions(JdbcTableHandle jdbcTableHandle, TupleDomain<ColumnHandle> tupleDomain)
+    public ConnectorSplitSource getSplits(JdbcTableLayoutHandle layoutHandle)
     {
-        // currently we don't support partitions
-        return new ConnectorPartitionResult(
-                ImmutableList.<ConnectorPartition>of(new JdbcPartition(jdbcTableHandle, tupleDomain)),
-                tupleDomain);
-    }
-
-    @Override
-    public ConnectorSplitSource getPartitionSplits(JdbcPartition jdbcPartition)
-    {
-        JdbcTableHandle jdbcTableHandle = jdbcPartition.getJdbcTableHandle();
+        JdbcTableHandle tableHandle = layoutHandle.getTable();
         JdbcSplit jdbcSplit = new JdbcSplit(
                 connectorId,
-                jdbcTableHandle.getCatalogName(),
-                jdbcTableHandle.getSchemaName(),
-                jdbcTableHandle.getTableName(),
+                tableHandle.getCatalogName(),
+                tableHandle.getSchemaName(),
+                tableHandle.getTableName(),
                 connectionUrl,
                 fromProperties(connectionProperties),
-                jdbcPartition.getTupleDomain());
+                layoutHandle.getTupleDomain());
         return new FixedSplitSource(connectorId, ImmutableList.of(jdbcSplit));
     }
 
@@ -327,7 +314,7 @@ public class BaseJdbcClient
                     fromProperties(connectionProperties));
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(JDBC_ERROR, e);
         }
     }
 
@@ -344,7 +331,7 @@ public class BaseJdbcClient
             execute(connection, sql.toString());
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(JDBC_ERROR, e);
         }
     }
 
@@ -359,7 +346,7 @@ public class BaseJdbcClient
             execute(connection, sql.toString());
         }
         catch (SQLException e) {
-            throw Throwables.propagate(e);
+            throw new PrestoException(JDBC_ERROR, e);
         }
     }
 
@@ -397,7 +384,7 @@ public class BaseJdbcClient
                 connection.getCatalog(),
                 escapeNamePattern(schemaName, escape),
                 escapeNamePattern(tableName, escape),
-                new String[] {"TABLE"});
+                new String[] {"TABLE", "VIEW"});
     }
 
     protected SchemaTableName getSchemaTableName(ResultSet resultSet)

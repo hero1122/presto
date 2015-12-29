@@ -26,7 +26,6 @@ import io.airlift.units.DataSize;
 
 import static com.facebook.presto.ExceededMemoryLimitException.exceededLocalLimit;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.type.TypeUtils.expectedValueSize;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static it.unimi.dsi.fastutil.HashCommon.arraySize;
@@ -41,9 +40,9 @@ public class TypedHistogram
     private int maxFill;
     private int mask;
 
-    private Type type;
+    private final Type type;
 
-    private BlockBuilder values;
+    private final BlockBuilder values;
     private IntBigArray hashPositions;
     private final LongBigArray counts;
 
@@ -57,7 +56,7 @@ public class TypedHistogram
 
         maxFill = calculateMaxFill(hashSize);
         mask = hashSize - 1;
-        values = this.type.createBlockBuilder(new BlockBuilderStatus(), hashSize, expectedValueSize(type, hashSize));
+        values = this.type.createBlockBuilder(new BlockBuilderStatus(), hashSize);
         hashPositions = new IntBigArray(-1);
         hashPositions.ensureCapacity(hashSize);
         counts = new LongBigArray();
@@ -162,7 +161,7 @@ public class TypedHistogram
         for (int i = 0; i < values.getPositionCount(); i++) {
             // find an empty slot for the address
             int hashPosition = getHashPosition(TypeUtils.hashPosition(type, values, i), newMask);
-            while (hashPositions.get(hashPosition) != -1) {
+            while (newHashPositions.get(hashPosition) != -1) {
                 hashPosition = (hashPosition + 1) & newMask;
             }
 

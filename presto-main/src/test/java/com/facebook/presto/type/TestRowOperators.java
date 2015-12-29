@@ -81,6 +81,7 @@ public class TestRowOperators
         assertFunction("array[test_row(1, 2)][1].col1", BIGINT, 2);
         assertFunction("test_row(FALSE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0, 4.0])).col1", new ArrayType(BIGINT), ImmutableList.of(1L, 2L));
         assertFunction("test_row(FALSE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0, 4.0])).col2", new MapType(BIGINT, DOUBLE), ImmutableMap.of(1L, 2.0, 3L, 4.0));
+        assertFunction("test_row(1.0, ARRAY[test_row(31, 4.1), test_row(32, 4.2)], test_row(3, 4.0)).col1[2].col0", BIGINT, 32);
     }
 
     @Test
@@ -112,7 +113,7 @@ public class TestRowOperators
             fail("hyperloglog is not comparable");
         }
         catch (SemanticException e) {
-            if (!e.getMessage().matches("Operator EQUAL.* not registered")) {
+            if (!e.getMessage().matches("line 1:55: Operator EQUAL.* not registered")) {
                 throw e;
             }
             //Expected

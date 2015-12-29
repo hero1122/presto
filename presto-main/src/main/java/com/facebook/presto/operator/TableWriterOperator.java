@@ -99,6 +99,12 @@ public class TableWriterOperator
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new TableWriterOperatorFactory(operatorId, pageSinkManager, target, inputChannels, sampleWeightChannel, session);
+        }
     }
 
     private enum State
@@ -185,7 +191,7 @@ public class TableWriterOperator
         }
         state = State.FINISHED;
 
-        Collection<Slice> fragments = pageSink.commit();
+        Collection<Slice> fragments = pageSink.finish();
         committed = true;
 
         PageBuilder page = new PageBuilder(TYPES);
@@ -214,7 +220,7 @@ public class TableWriterOperator
         if (!closed) {
             closed = true;
             if (!committed) {
-                pageSink.rollback();
+                pageSink.abort();
             }
         }
     }

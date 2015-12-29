@@ -14,7 +14,7 @@
 package com.facebook.presto.execution.scheduler;
 
 import com.facebook.presto.metadata.TableHandle;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.Symbol;
@@ -39,9 +39,8 @@ import java.util.Set;
 import java.util.stream.Stream;
 
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning.NONE;
 import static com.facebook.presto.sql.planner.PlanFragment.PlanDistribution.SOURCE;
-import static com.facebook.presto.sql.planner.plan.JoinNode.Type.CROSS;
+import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static org.testng.Assert.assertEquals;
 
@@ -152,7 +151,7 @@ public class TestPhasedExecutionSchedule
     {
         PlanNode planNode = new JoinNode(
                 new PlanNodeId(name + "_id"),
-                CROSS,
+                INNER,
                 new RemoteSourceNode(new PlanNodeId("probe_id"), probeFragment.getId(), ImmutableList.of()),
                 new RemoteSourceNode(new PlanNodeId("build_id"), buildFragment.getId(), ImmutableList.of()),
                 ImmutableList.of(),
@@ -190,9 +189,6 @@ public class TestPhasedExecutionSchedule
                 planNode.getOutputSymbols(),
                 SOURCE,
                 planNode.getId(),
-                NONE,
-                Optional.empty(),
-                Optional.empty(),
                 Optional.empty());
     }
 }

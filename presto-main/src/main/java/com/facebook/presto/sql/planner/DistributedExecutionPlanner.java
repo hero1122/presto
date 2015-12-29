@@ -25,6 +25,7 @@ import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
+import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
@@ -34,7 +35,7 @@ import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
-import com.facebook.presto.sql.planner.plan.TableCommitNode;
+import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
@@ -75,10 +76,10 @@ public class DistributedExecutionPlanner
             dependencies.add(plan(childPlan, session));
         }
 
-        return new StageExecutionPlan(currentFragment,
+        return new StageExecutionPlan(
+                currentFragment,
                 splits,
-                dependencies.build()
-        );
+                dependencies.build());
     }
 
     private final class Visitor
@@ -249,7 +250,7 @@ public class DistributedExecutionPlanner
         }
 
         @Override
-        public Optional<SplitSource> visitTableCommit(TableCommitNode node, Void context)
+        public Optional<SplitSource> visitTableFinish(TableFinishNode node, Void context)
         {
             return node.getSource().accept(this, context);
         }
@@ -258,6 +259,13 @@ public class DistributedExecutionPlanner
         public Optional<SplitSource> visitDelete(DeleteNode node, Void context)
         {
             return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Optional<SplitSource> visitMetadataDelete(MetadataDeleteNode node, Void context)
+        {
+            // MetadataDelete node does not have splits
+            return Optional.empty();
         }
 
         @Override

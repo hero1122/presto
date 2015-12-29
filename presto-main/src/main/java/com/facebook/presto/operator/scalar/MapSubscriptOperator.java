@@ -13,11 +13,10 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.annotation.UsedByGeneratedCode;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.OperatorType;
-import com.facebook.presto.metadata.ParametricOperator;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.BooleanType;
@@ -35,12 +34,11 @@ import static com.facebook.presto.metadata.OperatorType.SUBSCRIPT;
 import static com.facebook.presto.metadata.Signature.internalOperator;
 import static com.facebook.presto.metadata.Signature.typeParameter;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
-import static com.facebook.presto.type.TypeUtils.castValue;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
+import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
 import static com.facebook.presto.util.Reflection.methodHandle;
 
 public class MapSubscriptOperator
-        extends ParametricOperator
+        extends SqlOperator
 {
     public static final MapSubscriptOperator MAP_SUBSCRIPT = new MapSubscriptOperator();
 
@@ -56,7 +54,7 @@ public class MapSubscriptOperator
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         Type keyType = types.get("K");
         Type valueType = types.get("V");
@@ -89,16 +87,16 @@ public class MapSubscriptOperator
             methodHandle = methodHandle.asType(methodHandle.type().changeReturnType(Primitives.wrap(valueType.getJavaType())));
         }
 
-        Signature signature = internalOperator(SUBSCRIPT.name(), valueType.getTypeSignature(), parameterizedTypeName("map", keyType.getTypeSignature(), valueType.getTypeSignature()), keyType.getTypeSignature());
-        return new FunctionInfo(signature, "Map subscript", true, methodHandle, true, true, ImmutableList.of(false, false));
+        return new ScalarFunctionImplementation(true, ImmutableList.of(false, false), methodHandle, isDeterministic());
     }
 
+    @UsedByGeneratedCode
     public static Object subscript(MethodHandle keyEqualsMethod, Type keyType, Type valueType, Block map, boolean key)
     {
         for (int position = 0; position < map.getPositionCount(); position += 2) {
             try {
                 if ((boolean) keyEqualsMethod.invokeExact(keyType.getBoolean(map, position), key)) {
-                    return castValue(valueType, map, position + 1); // position + 1: value position
+                    return readNativeValue(valueType, map, position + 1); // position + 1: value position
                 }
             }
             catch (Throwable t) {
@@ -110,12 +108,13 @@ public class MapSubscriptOperator
         return null;
     }
 
+    @UsedByGeneratedCode
     public static Object subscript(MethodHandle keyEqualsMethod, Type keyType, Type valueType, Block map, long key)
     {
         for (int position = 0; position < map.getPositionCount(); position += 2) {
             try {
                 if ((boolean) keyEqualsMethod.invokeExact(keyType.getLong(map, position), key)) {
-                    return castValue(valueType, map, position + 1); // position + 1: value position
+                    return readNativeValue(valueType, map, position + 1); // position + 1: value position
                 }
             }
             catch (Throwable t) {
@@ -127,12 +126,13 @@ public class MapSubscriptOperator
         return null;
     }
 
+    @UsedByGeneratedCode
     public static Object subscript(MethodHandle keyEqualsMethod, Type keyType, Type valueType, Block map, double key)
     {
         for (int position = 0; position < map.getPositionCount(); position += 2) {
             try {
                 if ((boolean) keyEqualsMethod.invokeExact(keyType.getDouble(map, position), key)) {
-                    return castValue(valueType, map, position + 1); // position + 1: value position
+                    return readNativeValue(valueType, map, position + 1); // position + 1: value position
                 }
             }
             catch (Throwable t) {
@@ -144,12 +144,13 @@ public class MapSubscriptOperator
         return null;
     }
 
+    @UsedByGeneratedCode
     public static Object subscript(MethodHandle keyEqualsMethod, Type keyType, Type valueType, Block map, Slice key)
     {
         for (int position = 0; position < map.getPositionCount(); position += 2) {
             try {
                 if ((boolean) keyEqualsMethod.invokeExact(keyType.getSlice(map, position), key)) {
-                    return castValue(valueType, map, position + 1); // position + 1: value position
+                    return readNativeValue(valueType, map, position + 1); // position + 1: value position
                 }
             }
             catch (Throwable t) {
@@ -161,12 +162,13 @@ public class MapSubscriptOperator
         return null;
     }
 
+    @UsedByGeneratedCode
     public static Object subscript(MethodHandle keyEqualsMethod, Type keyType, Type valueType, Block map, Object key)
     {
         for (int position = 0; position < map.getPositionCount(); position += 2) {
             try {
                 if ((boolean) keyEqualsMethod.invokeExact(keyType.getObject(map, position), key)) {
-                    return castValue(valueType, map, position + 1); // position + 1: value position
+                    return readNativeValue(valueType, map, position + 1); // position + 1: value position
                 }
             }
             catch (Throwable t) {

@@ -16,6 +16,7 @@ package com.facebook.presto.byteCode.expression;
 import com.facebook.presto.byteCode.ByteCodeNode;
 import com.facebook.presto.byteCode.ByteCodeVisitor;
 import com.facebook.presto.byteCode.FieldDefinition;
+import com.facebook.presto.byteCode.MethodDefinition;
 import com.facebook.presto.byteCode.MethodGenerationContext;
 import com.facebook.presto.byteCode.ParameterizedType;
 import com.google.common.collect.ImmutableList;
@@ -23,9 +24,11 @@ import org.objectweb.asm.MethodVisitor;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.List;
 
 import static com.facebook.presto.byteCode.ParameterizedType.type;
 import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantInt;
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.transform;
 import static java.util.Objects.requireNonNull;
 
@@ -123,6 +126,13 @@ public abstract class ByteCodeExpression
         return invoke(method, ImmutableList.copyOf(requireNonNull(parameters, "parameters is null")));
     }
 
+    public final ByteCodeExpression invoke(MethodDefinition method, Iterable<? extends ByteCodeExpression> parameters)
+    {
+        List<ByteCodeExpression> params = ImmutableList.copyOf(parameters);
+        checkArgument(method.getParameters().size() == params.size(), "Expected %s params found %s", method.getParameters().size(), params.size());
+        return invoke(method.getName(), method.getReturnType(), parameters);
+    }
+
     public final ByteCodeExpression invoke(Method method, Iterable<? extends ByteCodeExpression> parameters)
     {
         return invoke(method.getName(), type(method.getReturnType()), parameters);
@@ -182,6 +192,21 @@ public abstract class ByteCodeExpression
         return new GetElementByteCodeExpression(this, index);
     }
 
+    public final ByteCodeExpression setElement(int index, ByteCodeExpression value)
+    {
+        return new SetArrayElementByteCodeExpression(this, constantInt(index), value);
+    }
+
+    public final ByteCodeExpression setElement(ByteCodeExpression index, ByteCodeExpression value)
+    {
+        return new SetArrayElementByteCodeExpression(this, index, value);
+    }
+
+    public final ByteCodeExpression length()
+    {
+        return new ArrayLengthByteCodeExpression(this);
+    }
+
     public final ByteCodeExpression ret()
     {
         return new ReturnByteCodeExpression(this);
@@ -205,5 +230,10 @@ public abstract class ByteCodeExpression
     public final <T> T accept(ByteCodeNode parent, ByteCodeVisitor<T> visitor)
     {
         return visitor.visitByteCodeExpression(parent, this);
+    }
+
+    public ByteCodeExpression instanceOf(Class<?> type)
+    {
+        return InstanceOfByteCodeExpression.instanceOf(this, type);
     }
 }

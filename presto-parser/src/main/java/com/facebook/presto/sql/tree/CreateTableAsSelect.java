@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableMap;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
@@ -27,12 +28,25 @@ public class CreateTableAsSelect
     private final QualifiedName name;
     private final Query query;
     private final Map<String, Expression> properties;
+    private final boolean withData;
 
-    public CreateTableAsSelect(QualifiedName name, Query query, Map<String, Expression> properties)
+    public CreateTableAsSelect(QualifiedName name, Query query, Map<String, Expression> properties, boolean withData)
     {
+        this(Optional.empty(), name, query, properties, withData);
+    }
+
+    public CreateTableAsSelect(NodeLocation location, QualifiedName name, Query query, Map<String, Expression> properties, boolean withData)
+    {
+        this(Optional.of(location), name, query, properties, withData);
+    }
+
+    private CreateTableAsSelect(Optional<NodeLocation> location, QualifiedName name, Query query, Map<String, Expression> properties, boolean withData)
+    {
+        super(location);
         this.name = requireNonNull(name, "name is null");
         this.query = requireNonNull(query, "query is null");
         this.properties = ImmutableMap.copyOf(requireNonNull(properties, "properties is null"));
+        this.withData = withData;
     }
 
     public QualifiedName getName()
@@ -50,6 +64,11 @@ public class CreateTableAsSelect
         return properties;
     }
 
+    public boolean isWithData()
+    {
+        return withData;
+    }
+
     @Override
     public <R, C> R accept(AstVisitor<R, C> visitor, C context)
     {
@@ -59,7 +78,7 @@ public class CreateTableAsSelect
     @Override
     public int hashCode()
     {
-        return Objects.hash(name, query, properties);
+        return Objects.hash(name, query, properties, withData);
     }
 
     @Override
@@ -74,7 +93,8 @@ public class CreateTableAsSelect
         CreateTableAsSelect o = (CreateTableAsSelect) obj;
         return Objects.equals(name, o.name)
                 && Objects.equals(query, o.query)
-                && Objects.equals(properties, o.properties);
+                && Objects.equals(properties, o.properties)
+                && Objects.equals(withData, o.withData);
     }
 
     @Override
@@ -84,6 +104,7 @@ public class CreateTableAsSelect
                 .add("name", name)
                 .add("query", query)
                 .add("properties", properties)
+                .add("withData", withData)
                 .toString();
     }
 }

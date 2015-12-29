@@ -15,6 +15,7 @@ package com.facebook.presto.raptor.storage;
 
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcRecordReader;
+import com.facebook.presto.orc.memory.AggregatedMemoryContext;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.UpdatablePageSource;
@@ -35,6 +36,7 @@ import java.io.IOException;
 import java.util.BitSet;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -57,7 +59,7 @@ public class OrcPageSource
     public static final int ROWID_COLUMN = -2;
     public static final int SHARD_UUID_COLUMN = -3;
 
-    private final ShardRewriter shardRewriter;
+    private final Optional<ShardRewriter> shardRewriter;
 
     private final OrcRecordReader recordReader;
     private final OrcDataSource orcDataSource;
@@ -70,19 +72,22 @@ public class OrcPageSource
     private final Block[] constantBlocks;
     private final int[] columnIndexes;
 
+    private final AggregatedMemoryContext systemMemoryContext;
+
     private long completedBytes;
 
     private int batchId;
     private boolean closed;
 
     public OrcPageSource(
-            ShardRewriter shardRewriter,
+            Optional<ShardRewriter> shardRewriter,
             OrcRecordReader recordReader,
             OrcDataSource orcDataSource,
             List<Long> columnIds,
             List<Type> columnTypes,
             List<Integer> columnIndexes,
-            UUID shardUuid)
+            UUID shardUuid,
+            AggregatedMemoryContext systemMemoryContext)
     {
         this.shardRewriter = requireNonNull(shardRewriter, "shardRewriter is null");
         this.recordReader = requireNonNull(recordReader, "recordReader is null");
@@ -111,6 +116,8 @@ public class OrcPageSource
                 constantBlocks[i] = buildSingleValueBlock(Slices.utf8Slice(shardUuid.toString()));
             }
         }
+
+        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
     }
 
     @Override
@@ -208,9 +215,16 @@ public class OrcPageSource
     }
 
     @Override
-    public CompletableFuture<Collection<Slice>> commit()
+    public CompletableFuture<Collection<Slice>> finish()
     {
-        return shardRewriter.rewrite(rowsToDelete);
+        checkState(shardRewriter.isPresent(), "shardRewriter is missing");
+        return shardRewriter.get().rewrite(rowsToDelete);
+    }
+
+    @Override
+    public long getSystemMemoryUsage()
+    {
+        return systemMemoryContext.getBytes();
     }
 
     private void closeWithSuppression(Throwable throwable)

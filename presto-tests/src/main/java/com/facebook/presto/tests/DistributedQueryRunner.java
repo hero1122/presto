@@ -18,7 +18,7 @@ import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.metadata.AllNodes;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.QualifiedTableName;
+import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.server.testing.TestingPrestoServer;
 import com.facebook.presto.spi.Node;
@@ -26,6 +26,7 @@ import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.testing.TestingAccessControlManager;
+import com.facebook.presto.transaction.TransactionManager;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -93,8 +94,12 @@ public class DistributedQueryRunner
             this.servers = servers.build();
         }
         catch (Exception e) {
-            close();
-            throw e;
+            try {
+                throw closer.rethrow(e, Exception.class);
+            }
+            finally {
+                closer.close();
+            }
         }
 
         this.prestoClient = closer.register(new TestingPrestoClient(coordinator, defaultSession));
@@ -129,10 +134,9 @@ public class DistributedQueryRunner
                 .put("compiler.interpreter-enabled", "false")
                 .put("task.max-index-memory", "16kB") // causes index joins to fault load
                 .put("datasources", "system")
-                .put("distributed-index-joins-enabled", "true")
-                .put("optimizer.optimize-hash-generation", "true");
+                .put("distributed-index-joins-enabled", "true");
         if (coordinator) {
-            propertiesBuilder.put("node-scheduler.include-coordinator", "false");
+            propertiesBuilder.put("node-scheduler.include-coordinator", "true");
             propertiesBuilder.put("distributed-joins-enabled", "true");
             propertiesBuilder.put("node-scheduler.multiple-tasks-per-node-enabled", "true");
         }
@@ -173,6 +177,12 @@ public class DistributedQueryRunner
     public Session getDefaultSession()
     {
         return prestoClient.getDefaultSession();
+    }
+
+    @Override
+    public TransactionManager getTransactionManager()
+    {
+        return coordinator.getTransactionManager();
     }
 
     @Override
@@ -249,7 +259,7 @@ public class DistributedQueryRunner
     }
 
     @Override
-    public List<QualifiedTableName> listTables(Session session, String catalog, String schema)
+    public List<QualifiedObjectName> listTables(Session session, String catalog, String schema)
     {
         lock.readLock().lock();
         try {
@@ -258,7 +268,6 @@ public class DistributedQueryRunner
         finally {
             lock.readLock().unlock();
         }
-
     }
 
     @Override
@@ -271,7 +280,6 @@ public class DistributedQueryRunner
         finally {
             lock.readLock().unlock();
         }
-
     }
 
     @Override
@@ -284,7 +292,6 @@ public class DistributedQueryRunner
         finally {
             lock.readLock().unlock();
         }
-
     }
 
     @Override
@@ -297,7 +304,6 @@ public class DistributedQueryRunner
         finally {
             lock.readLock().unlock();
         }
-
     }
 
     @Override

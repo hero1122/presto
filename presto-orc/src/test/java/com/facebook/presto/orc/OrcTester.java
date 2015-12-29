@@ -14,6 +14,7 @@
 package com.facebook.presto.orc;
 
 import com.facebook.hive.orc.OrcConf;
+import com.facebook.presto.orc.memory.AggregatedMemoryContext;
 import com.facebook.presto.orc.metadata.DwrfMetadataReader;
 import com.facebook.presto.orc.metadata.MetadataReader;
 import com.facebook.presto.orc.metadata.OrcMetadataReader;
@@ -385,15 +386,15 @@ public class OrcTester
             throws IOException
     {
         OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE));
-        OrcReader orcReader = new OrcReader(orcDataSource, metadataReader);
+        OrcReader orcReader = new OrcReader(orcDataSource, metadataReader, new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE));
 
         assertEquals(orcReader.getColumnNames(), ImmutableList.of("test"));
         assertEquals(orcReader.getFooter().getRowsInRowGroup(), 10_000);
 
-        return orcReader.createRecordReader(ImmutableMap.of(0, type), predicate, HIVE_STORAGE_TIME_ZONE);
+        return orcReader.createRecordReader(ImmutableMap.of(0, type), predicate, HIVE_STORAGE_TIME_ZONE, new AggregatedMemoryContext());
     }
 
-    private static DataSize writeOrcColumn(File outputFile, Format format, Compression compression, ObjectInspector columnObjectInspector, Iterator<?> values)
+    static DataSize writeOrcColumn(File outputFile, Format format, Compression compression, ObjectInspector columnObjectInspector, Iterator<?> values)
             throws Exception
     {
         RecordWriter recordWriter;
@@ -403,7 +404,12 @@ public class OrcTester
         else {
             recordWriter = createOrcRecordWriter(outputFile, format, compression, columnObjectInspector);
         }
+        return writeOrcColumn(outputFile, format, recordWriter, columnObjectInspector, values);
+    }
 
+    static DataSize writeOrcColumn(File outputFile, Format format, RecordWriter recordWriter, ObjectInspector columnObjectInspector, Iterator<?> values)
+            throws Exception
+    {
         SettableStructObjectInspector objectInspector = createSettableStructObjectInspector("test", columnObjectInspector);
         Object row = objectInspector.create();
 

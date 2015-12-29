@@ -15,13 +15,10 @@
 package com.facebook.presto.plugin.blackhole;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.metadata.QualifiedTableName;
+import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.testing.QueryRunner;
-import com.facebook.presto.tests.DistributedQueryRunner;
-import com.facebook.presto.tpch.TpchPlugin;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import org.testng.annotations.AfterTest;
 import org.testng.annotations.BeforeTest;
@@ -30,11 +27,12 @@ import org.testng.annotations.Test;
 import java.sql.SQLException;
 import java.util.List;
 
+import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.FIELD_LENGTH_PROPERTY;
 import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.PAGES_PER_SPLIT_PROPERTY;
 import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.ROWS_PER_PAGE_PROPERTY;
 import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.SPLIT_COUNT_PROPERTY;
+import static com.facebook.presto.plugin.blackhole.BlackHoleQueryRunner.createQueryRunner;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
-import static io.airlift.testing.Closeables.closeAllSuppress;
 import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
@@ -49,20 +47,7 @@ public class BlackHoleSmokeTest
     public void setUp()
             throws Exception
     {
-        try {
-            queryRunner = new DistributedQueryRunner(createSession(), 3);
-
-            queryRunner.installPlugin(new BlackHolePlugin());
-            queryRunner.createCatalog("blackhole", "blackhole", ImmutableMap.of());
-
-            queryRunner.installPlugin(new TpchPlugin());
-            queryRunner.createCatalog("tpch", "tpch", ImmutableMap.of());
-            assertThatNoBlackHoleTableIsCreated();
-        }
-        catch (Throwable e) {
-            closeAllSuppress(e, queryRunner);
-            throw e;
-        }
+        queryRunner = createQueryRunner();
     }
 
     @AfterTest
@@ -70,14 +55,6 @@ public class BlackHoleSmokeTest
     {
         assertThatNoBlackHoleTableIsCreated();
         queryRunner.close();
-    }
-
-    public static Session createSession()
-    {
-        return testSessionBuilder()
-                .setCatalog("blackhole")
-                .setSchema("default")
-                .build();
     }
 
     @Test
@@ -91,7 +68,7 @@ public class BlackHoleSmokeTest
             fail("Expected exception to be thrown here!");
         }
         catch (RuntimeException ex) { // it has to RuntimeException as FailureInfo$FailureException is private
-            assertTrue(ex.getMessage().equals("Destination table 'blackhole.default.nation' already exists"));
+            assertTrue(ex.getMessage().equals("line 1:1: Destination table 'blackhole.default.nation' already exists"));
         }
         finally {
             assertThatQueryReturnsValue("DROP TABLE nation", true);
@@ -104,9 +81,9 @@ public class BlackHoleSmokeTest
     {
         assertThatQueryReturnsValue("CREATE TABLE nation as SELECT * FROM tpch.tiny.nation", 25L);
 
-        List<QualifiedTableName> tableNames = listBlackHoleTables();
+        List<QualifiedObjectName> tableNames = listBlackHoleTables();
         assertTrue(tableNames.size() == 1, "Expected only one table.");
-        assertTrue(tableNames.get(0).getTableName().equals("nation"), "Expected 'nation' table.");
+        assertTrue(tableNames.get(0).getObjectName().equals("nation"), "Expected 'nation' table.");
 
         assertThatQueryReturnsValue("INSERT INTO nation SELECT * FROM tpch.tiny.nation", 25L);
 
@@ -170,14 +147,43 @@ public class BlackHoleSmokeTest
         assertThatQueryReturnsValue("DROP TABLE nation", true);
     }
 
+    @Test
+    public void fieldLength()
+    {
+        Session session = testSessionBuilder()
+                .setCatalog("blackhole")
+                .setSchema("default")
+                .build();
+
+        assertThatQueryReturnsValue(
+                format("CREATE TABLE nation WITH ( %s = 8, %s = 1, %s = 1, %s = 1 ) as SELECT * FROM tpch.tiny.nation",
+                        FIELD_LENGTH_PROPERTY,
+                        ROWS_PER_PAGE_PROPERTY,
+                        PAGES_PER_SPLIT_PROPERTY,
+                        SPLIT_COUNT_PROPERTY),
+                25L,
+                session);
+
+        MaterializedResult rows = queryRunner.execute(session, "SELECT * FROM nation");
+        assertEquals(rows.getRowCount(), 1);
+        MaterializedRow row = Iterables.getOnlyElement(rows);
+        assertEquals(row.getFieldCount(), 4);
+        assertEquals(row.getField(0), 0L);
+        assertEquals(row.getField(1), "********");
+        assertEquals(row.getField(2), 0L);
+        assertEquals(row.getField(3), "********");
+
+        assertThatQueryReturnsValue("DROP TABLE nation", true);
+    }
+
     private void assertThatNoBlackHoleTableIsCreated()
     {
         assertTrue(listBlackHoleTables().size() == 0, "No blackhole tables expected");
     }
 
-    private List<QualifiedTableName> listBlackHoleTables()
+    private List<QualifiedObjectName> listBlackHoleTables()
     {
-        return queryRunner.listTables(createSession(), "blackhole", "default");
+        return queryRunner.listTables(queryRunner.getDefaultSession(), "blackhole", "default");
     }
 
     private void assertThatQueryReturnsValue(String sql, Object expected)
@@ -192,7 +198,7 @@ public class BlackHoleSmokeTest
         int fieldCount = materializedRow.getFieldCount();
         assertTrue(fieldCount == 1, format("Expected only one column, but got '%d'", fieldCount));
         Object value = materializedRow.getField(0);
-        assertTrue(value == expected, format("Expected '%s', but got '%s'", expected, value));
+        assertEquals(value, expected);
         assertTrue(Iterables.getOnlyElement(rows).getFieldCount() == 1);
     }
 }

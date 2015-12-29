@@ -22,12 +22,13 @@ import com.facebook.presto.orc.OrcReader;
 import com.facebook.presto.orc.OrcRecordReader;
 import com.facebook.presto.orc.TupleDomainOrcPredicate;
 import com.facebook.presto.orc.TupleDomainOrcPredicate.ColumnReference;
+import com.facebook.presto.orc.memory.AggregatedMemoryContext;
 import com.facebook.presto.orc.metadata.MetadataReader;
 import com.facebook.presto.orc.metadata.OrcMetadataReader;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
@@ -148,14 +149,17 @@ public class OrcPageSourceFactory
 
         OrcPredicate predicate = new TupleDomainOrcPredicate<>(effectivePredicate, columnReferences.build());
 
+        AggregatedMemoryContext systemMemoryUsage = new AggregatedMemoryContext();
+
         try {
-            OrcReader reader = new OrcReader(orcDataSource, metadataReader);
+            OrcReader reader = new OrcReader(orcDataSource, metadataReader, maxMergeDistance, maxBufferSize);
             OrcRecordReader recordReader = reader.createRecordReader(
                     includedColumns.build(),
                     predicate,
                     start,
                     length,
-                    hiveStorageTimeZone);
+                    hiveStorageTimeZone,
+                    systemMemoryUsage);
 
             return new OrcPageSource(
                     recordReader,
@@ -163,7 +167,8 @@ public class OrcPageSourceFactory
                     partitionKeys,
                     columns,
                     hiveStorageTimeZone,
-                    typeManager);
+                    typeManager,
+                    systemMemoryUsage);
         }
         catch (Exception e) {
             try {

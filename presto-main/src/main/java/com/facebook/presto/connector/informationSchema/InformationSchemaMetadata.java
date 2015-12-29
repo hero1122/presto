@@ -15,12 +15,12 @@ package com.facebook.presto.connector.informationSchema;
 
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
-import com.facebook.presto.spi.ConnectorMetadata;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
+import com.facebook.presto.spi.connector.ConnectorMetadata;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
@@ -91,11 +91,13 @@ public class InformationSchemaMetadata
                     .build())
             .build();
 
+    private final String connectorId;
     private final String catalogName;
 
-    public InformationSchemaMetadata(String catalogName)
+    public InformationSchemaMetadata(String connectorId, String catalogName)
     {
-        this.catalogName = catalogName;
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
+        this.catalogName = requireNonNull(catalogName, "catalogName is null");
     }
 
     private InformationSchemaTableHandle checkTableHandle(ConnectorTableHandle tableHandle)
@@ -119,7 +121,7 @@ public class InformationSchemaMetadata
             return null;
         }
 
-        return new InformationSchemaTableHandle(catalogName, tableName.getSchemaName(), tableName.getTableName());
+        return new InformationSchemaTableHandle(connectorId, catalogName, tableName.getSchemaName(), tableName.getTableName());
     }
 
     @Override
@@ -159,7 +161,7 @@ public class InformationSchemaMetadata
 
         ConnectorTableMetadata tableMetadata = TABLES.get(informationSchemaTableHandle.getSchemaTableName());
 
-        return toInformationSchemaColumnHandles(tableMetadata);
+        return toInformationSchemaColumnHandles(connectorId, tableMetadata);
     }
 
     @Override

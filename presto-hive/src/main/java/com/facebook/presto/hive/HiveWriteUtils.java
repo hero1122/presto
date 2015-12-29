@@ -30,8 +30,8 @@ import com.facebook.presto.spi.type.VarcharType;
 import com.google.common.base.StandardSystemProperty;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.ProtectMode;
 import org.apache.hadoop.hive.metastore.api.Database;
@@ -47,6 +47,7 @@ import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.Reporter;
+import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 import java.sql.Date;
@@ -83,9 +84,13 @@ import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveO
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaLongObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaStringObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaTimestampObjectInspector;
+import static org.joda.time.DateTimeZone.UTC;
 
 public final class HiveWriteUtils
 {
+    @SuppressWarnings("OctalInteger")
+    private static final FsPermission ALL_PERMISSIONS = new FsPermission((short) 0777);
+
     private HiveWriteUtils()
     {
     }
@@ -175,9 +180,8 @@ public final class HiveWriteUtils
             return type.getSlice(block, position).getBytes();
         }
         if (DateType.DATE.equals(type)) {
-            // todo should this be adjusted to midnight in JVM timezone?
             long days = type.getLong(block, position);
-            return new Date(TimeUnit.DAYS.toMillis(days));
+            return new Date(UTC.getMillisKeepLocal(DateTimeZone.getDefault(), TimeUnit.DAYS.toMillis(days)));
         }
         if (TimestampType.TIMESTAMP.equals(type)) {
             long millisUtc = type.getLong(block, position);
@@ -348,10 +352,12 @@ public final class HiveWriteUtils
                     format("Unable to commit creation of table '%s.%s': target directory already exists: %s", schemaName, tableName, target));
         }
 
+        if (!pathExists(hdfsEnvironment, target.getParent())) {
+            createDirectory(hdfsEnvironment, target.getParent());
+        }
+
         try {
-            FileSystem fileSystem = hdfsEnvironment.getFileSystem(source);
-            fileSystem.mkdirs(target.getParent());
-            if (!fileSystem.rename(source, target)) {
+            if (!hdfsEnvironment.getFileSystem(source).rename(source, target)) {
                 throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Failed to rename %s to %s: rename returned false", source, target));
             }
         }
@@ -360,7 +366,7 @@ public final class HiveWriteUtils
         }
     }
 
-    public static String createTemporaryPath(HdfsEnvironment hdfsEnvironment, Path targetPath)
+    public static Path createTemporaryPath(HdfsEnvironment hdfsEnvironment, Path targetPath)
     {
         // use a per-user temporary directory to avoid permission problems
         // TODO: this should use Hadoop UserGroupInformation
@@ -372,18 +378,26 @@ public final class HiveWriteUtils
 
         createDirectory(hdfsEnvironment, temporaryPath);
 
-        return temporaryPath.toString();
+        return temporaryPath;
     }
 
-    public static void createDirectory(HdfsEnvironment hdfsEnvironment, Path temporaryPath)
+    public static void createDirectory(HdfsEnvironment hdfsEnvironment, Path path)
     {
         try {
-            if (!hdfsEnvironment.getFileSystem(temporaryPath).mkdirs(temporaryPath)) {
+            if (!hdfsEnvironment.getFileSystem(path).mkdirs(path, ALL_PERMISSIONS)) {
                 throw new IOException("mkdirs returned false");
             }
         }
         catch (IOException e) {
-            throw new PrestoException(HIVE_FILESYSTEM_ERROR, "Failed to create directory: " + temporaryPath, e);
+            throw new PrestoException(HIVE_FILESYSTEM_ERROR, "Failed to create directory: " + path, e);
+        }
+
+        // explicitly set permission since the default umask overrides it on creation
+        try {
+            hdfsEnvironment.getFileSystem(path).setPermission(path, ALL_PERMISSIONS);
+        }
+        catch (IOException e) {
+            throw new PrestoException(HIVE_FILESYSTEM_ERROR, "Failed to set permission on directory: " + path, e);
         }
     }
 }

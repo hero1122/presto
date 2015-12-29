@@ -67,14 +67,13 @@ import static com.facebook.presto.hive.HiveErrorCode.HIVE_PATH_ALREADY_EXISTS;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_TOO_MANY_OPEN_PARTITIONS;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNSUPPORTED_FORMAT;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_ERROR;
+import static com.facebook.presto.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
 import static com.facebook.presto.hive.HiveType.toHiveTypes;
 import static com.facebook.presto.hive.HiveWriteUtils.getField;
 import static com.facebook.presto.hive.HiveWriteUtils.getJavaObjectInspectors;
-import static com.facebook.presto.hive.HiveWriteUtils.getTableDefaultLocation;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Verify.verify;
 import static io.airlift.slice.Slices.wrappedBuffer;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -92,7 +91,6 @@ public class HivePageSink
     private final String tableName;
 
     private final int[] dataColumns;
-    private final int sampleWeightDataColumn;
     private final List<String> dataColumnNames;
     private final List<Type> dataColumnTypes;
 
@@ -101,7 +99,8 @@ public class HivePageSink
     private final List<Type> partitionColumnTypes;
 
     private final HiveStorageFormat tableStorageFormat;
-    private final Optional<Path> writePath;
+    private final LocationHandle locationHandle;
+    private final LocationService locationService;
     private final String filePrefix;
 
     private final HiveMetastore metastore;
@@ -128,7 +127,8 @@ public class HivePageSink
             boolean isCreateTable,
             List<HiveColumnHandle> inputColumns,
             HiveStorageFormat tableStorageFormat,
-            Optional<Path> writePath,
+            LocationHandle locationHandle,
+            LocationService locationService,
             String filePrefix,
             HiveMetastore metastore,
             PageIndexerFactory pageIndexerFactory,
@@ -145,7 +145,8 @@ public class HivePageSink
         requireNonNull(inputColumns, "inputColumns is null");
 
         this.tableStorageFormat = requireNonNull(tableStorageFormat, "tableStorageFormat is null");
-        this.writePath = requireNonNull(writePath, "writePath is null");
+        this.locationHandle = requireNonNull(locationHandle, "locationHandle is null");
+        this.locationService = requireNonNull(locationService, "locationService is null");
         this.filePrefix = requireNonNull(filePrefix, "filePrefix is null");
 
         this.metastore = requireNonNull(metastore, "metastore is null");
@@ -198,7 +199,6 @@ public class HivePageSink
         }
         this.partitionColumns = Ints.toArray(partitionColumns.build());
         this.dataColumns = Ints.toArray(dataColumns.build());
-        this.sampleWeightDataColumn = this.dataColumnNames.indexOf(SAMPLE_WEIGHT_COLUMN_NAME);
 
         this.pageIndexer = pageIndexerFactory.createPageIndexer(this.partitionColumnTypes);
 
@@ -208,6 +208,7 @@ public class HivePageSink
 
         if (isCreateTable) {
             this.table = null;
+            Optional<Path> writePath = locationService.writePathRoot(locationHandle);
             checkArgument(writePath.isPresent(), "CREATE TABLE must have a write path");
             conf = new JobConf(hdfsEnvironment.getConfiguration(writePath.get()));
         }
@@ -217,13 +218,13 @@ public class HivePageSink
                 throw new PrestoException(HIVE_INVALID_METADATA, format("Table %s.%s was dropped during insert", schemaName, tableName));
             }
             this.table = table.get();
-            Path hdfsEnvironmentPath = writePath.orElse(new Path(this.table.getSd().getLocation()));
+            Path hdfsEnvironmentPath = locationService.writePathRoot(locationHandle).orElseGet(() -> locationService.targetPathRoot(locationHandle));
             conf = new JobConf(hdfsEnvironment.getConfiguration(hdfsEnvironmentPath));
         }
     }
 
     @Override
-    public Collection<Slice> commit()
+    public Collection<Slice> finish()
     {
         ImmutableList.Builder<Slice> partitionUpdates = ImmutableList.builder();
         for (HiveRecordWriter writer : writers) {
@@ -237,7 +238,7 @@ public class HivePageSink
     }
 
     @Override
-    public void rollback()
+    public void abort()
     {
         for (HiveRecordWriter writer : writers) {
             if (writer != null) {
@@ -280,49 +281,71 @@ public class HivePageSink
 
     private HiveRecordWriter createWriter(List<Object> partitionRow)
     {
+        checkArgument(partitionRow.size() == partitionColumnNames.size(), "size of partitionRow is different from partitionColumnNames");
+
         List<String> partitionValues = partitionRow.stream()
-                .map(Object::toString) // todo this seems wrong
+                .map(value -> (value == null) ? HIVE_DEFAULT_DYNAMIC_PARTITION : value.toString())
                 .collect(toList());
 
-        String partitionName = FileUtils.makePartName(partitionColumnNames, partitionValues);
+        Optional<String> partitionName;
+        if (!partitionColumnNames.isEmpty()) {
+            partitionName = Optional.of(FileUtils.makePartName(partitionColumnNames, partitionValues));
+        }
+        else {
+            partitionName = Optional.empty();
+        }
 
         // attempt to get the existing partition (if this is an existing partitioned table)
         Optional<Partition> partition = Optional.empty();
         if (!partitionRow.isEmpty() && table != null) {
-            partition = metastore.getPartition(schemaName, tableName, partitionName);
+            partition = metastore.getPartition(schemaName, tableName, partitionName.get());
         }
 
+        boolean isNew;
+        Properties schema;
+        Path target;
+        Path write;
+        String outputFormat;
+        String serDe;
         if (!partition.isPresent()) {
-            Properties schema;
-            String target;
-            String outputFormat;
-            String serDe;
             if (table == null) {
-                // Write new a table either in a new partition or directly for an unpartitioned table
+                // Write to: a new partition in a new partitioned table,
+                //           or a new unpartitioned table.
+                isNew = true;
                 schema = new Properties();
                 schema.setProperty(META_TABLE_COLUMNS, Joiner.on(',').join(dataColumnNames));
                 schema.setProperty(META_TABLE_COLUMN_TYPES, dataColumnTypes.stream()
                         .map(HiveType::toHiveType)
                         .map(HiveType::getHiveTypeName)
                         .collect(Collectors.joining(":")));
-                target = getTableDefaultLocation(metastore, hdfsEnvironment, schemaName, tableName).toString();
+                target = locationService.targetPath(locationHandle, partitionName);
+                write = locationService.writePath(locationHandle, partitionName).get();
 
-                if (!partitionRow.isEmpty()) {
+                if (partitionName.isPresent()) {
                     // verify the target directory for the partition does not already exist
-                    Path newPartitionPath = new Path(target, partitionName);
-                    if (HiveWriteUtils.pathExists(hdfsEnvironment, newPartitionPath)) {
+                    if (HiveWriteUtils.pathExists(hdfsEnvironment, target)) {
                         throw new PrestoException(HIVE_PATH_ALREADY_EXISTS, format("Target directory for new partition '%s' of table '%s.%s' already exists: %s",
                                 partitionName,
                                 schemaName,
                                 tableName,
-                                newPartitionPath));
+                                target));
                     }
                 }
                 outputFormat = tableStorageFormat.getOutputFormat();
                 serDe = tableStorageFormat.getSerDe();
             }
             else {
-                // Write new partition in a partitioned table, or append to an existing unpartitioned table
+                // Write to: a new partition in an existing partitioned table,
+                //           or an existing unpartitioned table
+                if (partitionName.isPresent()) {
+                    isNew = true;
+                }
+                else {
+                    if (immutablePartitions) {
+                        throw new PrestoException(HIVE_PARTITION_READ_ONLY, "Unpartitioned Hive tables are immutable");
+                    }
+                    isNew = false;
+                }
                 schema = MetaStoreUtils.getSchema(
                         table.getSd(),
                         table.getSd(),
@@ -330,7 +353,8 @@ public class HivePageSink
                         schemaName,
                         tableName,
                         table.getPartitionKeys());
-                target = table.getSd().getLocation();
+                target = locationService.targetPath(locationHandle, partitionName);
+                write = locationService.writePath(locationHandle, partitionName).orElse(target);
                 if (respectTableFormat) {
                     outputFormat = table.getSd().getOutputFormat();
                 }
@@ -339,76 +363,40 @@ public class HivePageSink
                 }
                 serDe = table.getSd().getSerdeInfo().getSerializationLib();
             }
-            if (!partitionName.isEmpty()) {
-                target = new Path(target, partitionName).toString();
-            }
-
-            Path write;
-            if (writePath.isPresent()) {
-                write = writePath.get();
-            }
-            else {
-                verify(table != null, "CREATE TABLE must have a temp location");
-                write = new Path(table.getSd().getLocation());
-            }
-            if (!partitionRow.isEmpty()) {
-                write = new Path(write, partitionName);
-            }
-
-            return new HiveRecordWriter(
-                    schemaName,
-                    tableName,
-                    partitionName,
-                    true,
-                    dataColumnNames,
-                    dataColumnTypes,
-                    outputFormat,
-                    serDe,
-                    schema,
-                    generateRandomFileName(outputFormat),
-                    write,
-                    target,
-                    typeManager,
-                    conf);
         }
         else {
+            // Write to: an existing partition in an existing partitioned table,
             if (immutablePartitions) {
                 throw new PrestoException(HIVE_PARTITION_READ_ONLY, "Hive partitions are immutable");
             }
+            isNew = false;
 
             // Append to an existing partition
-            HiveWriteUtils.checkPartitionIsWritable(partitionName, partition.get());
+            HiveWriteUtils.checkPartitionIsWritable(partitionName.get(), partition.get());
 
             StorageDescriptor storageDescriptor = partition.get().getSd();
-            String outputFormat = storageDescriptor.getOutputFormat();
-            String serDe = storageDescriptor.getSerdeInfo().getSerializationLib();
-            Properties schema = MetaStoreUtils.getSchema(partition.get(), table);
-            String targetPath = storageDescriptor.getLocation();
+            outputFormat = storageDescriptor.getOutputFormat();
+            serDe = storageDescriptor.getSerdeInfo().getSerializationLib();
+            schema = MetaStoreUtils.getSchema(partition.get(), table);
 
-            Path write;
-            if (writePath.isPresent()) {
-                write = new Path(writePath.get(), partitionName);
-            }
-            else {
-                write = new Path(storageDescriptor.getLocation());
-            }
-
-            return new HiveRecordWriter(
-                    schemaName,
-                    tableName,
-                    partitionName,
-                    false,
-                    dataColumnNames,
-                    dataColumnTypes,
-                    outputFormat,
-                    serDe,
-                    schema,
-                    generateRandomFileName(outputFormat),
-                    write,
-                    targetPath,
-                    typeManager,
-                    conf);
+            target = locationService.targetPath(locationHandle, partition.get(), partitionName.get());
+            write = locationService.writePath(locationHandle, partitionName).orElse(target);
         }
+        return new HiveRecordWriter(
+                schemaName,
+                tableName,
+                partitionName.orElse(""),
+                isNew,
+                dataColumnNames,
+                dataColumnTypes,
+                outputFormat,
+                serDe,
+                schema,
+                generateRandomFileName(outputFormat),
+                write.toString(),
+                target.toString(),
+                typeManager,
+                conf);
     }
 
     private String generateRandomFileName(String outputFormat)
@@ -443,7 +431,8 @@ public class HivePageSink
             blocks[i] = page.getBlock(dataColumn);
         }
         if (sampleWeightBlock != null) {
-            blocks[sampleWeightDataColumn] = sampleWeightBlock;
+            // sample weight block is always last
+            blocks[blocks.length - 1] = sampleWeightBlock;
         }
         return blocks;
     }
@@ -470,7 +459,7 @@ public class HivePageSink
         private final String partitionName;
         private final boolean isNew;
         private final String fileName;
-        private final Path writePath;
+        private final String writePath;
         private final String targetPath;
         private final int fieldCount;
         @SuppressWarnings("deprecation")
@@ -491,7 +480,7 @@ public class HivePageSink
                 String serDe,
                 Properties schema,
                 String fileName,
-                Path writePath,
+                String writePath,
                 String targetPath,
                 TypeManager typeManager,
                 JobConf conf)
@@ -600,7 +589,7 @@ public class HivePageSink
             return new PartitionUpdate(
                     partitionName,
                     isNew,
-                    writePath.toString(),
+                    writePath,
                     targetPath,
                     ImmutableList.of(fileName));
         }
