@@ -22,7 +22,7 @@ import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.operator.index.IndexJoinLookupStats;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.PageSinkManager;
 import com.facebook.presto.split.PageSourceManager;
@@ -31,7 +31,6 @@ import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.CompilerConfig;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.TestingColumnHandle;
@@ -76,9 +75,6 @@ public final class TaskTestUtils
             ImmutableList.of(SYMBOL),
             PlanDistribution.SOURCE,
             TABLE_SCAN_NODE_ID,
-            OutputPartitioning.NONE,
-            Optional.empty(),
-            Optional.empty(),
             Optional.empty());
 
     public static LocalExecutionPlanner createTestingPlanner()

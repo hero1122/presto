@@ -152,6 +152,12 @@ public class ParallelHashBuilder
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            throw new UnsupportedOperationException("Parallel hash collector can not be duplicated");
+        }
     }
 
     private static class ParallelHashCollectOperator
@@ -330,6 +336,12 @@ public class ParallelHashBuilder
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            throw new UnsupportedOperationException("Parallel hash collector can not be duplicated");
+        }
     }
 
     private static class ParallelHashBuilderOperator
@@ -390,9 +402,8 @@ public class ParallelHashBuilder
             }
 
             PagesIndex pagesIndex = Futures.getUnchecked(pagesIndexFuture);
-            // Free memory, as the SharedLookupSource is going to take it over
-            operatorContext.setMemoryReservation(0);
-            SharedLookupSource sharedLookupSource = new SharedLookupSource(pagesIndex.createLookupSource(hashChannels, hashChannel), operatorContext.getDriverContext().getPipelineContext().getTaskContext());
+            // After this point the SharedLookupSource will take over our memory reservation, and ours will be zero
+            SharedLookupSource sharedLookupSource = new SharedLookupSource(pagesIndex.createLookupSource(hashChannels, hashChannel), operatorContext);
 
             if (!lookupSourceFuture.set(sharedLookupSource)) {
                 sharedLookupSource.freeMemory();

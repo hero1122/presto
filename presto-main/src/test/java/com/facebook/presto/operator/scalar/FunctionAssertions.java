@@ -16,8 +16,8 @@ package com.facebook.presto.operator.scalar;
 import com.facebook.presto.Session;
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.ParametricFunction;
 import com.facebook.presto.metadata.Split;
+import com.facebook.presto.metadata.SqlFunction;
 import com.facebook.presto.operator.CursorProcessor;
 import com.facebook.presto.operator.DriverContext;
 import com.facebook.presto.operator.FilterAndProjectOperator;
@@ -55,9 +55,12 @@ import com.facebook.presto.sql.relational.RowExpression;
 import com.facebook.presto.sql.relational.SqlToRowExpressionTranslator;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.DefaultTraversalVisitor;
+import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionRewriter;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
+import com.facebook.presto.sql.tree.FunctionCall;
+import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.testing.MaterializedResult;
@@ -83,7 +86,7 @@ import static com.facebook.presto.block.BlockAssertions.createDoublesBlock;
 import static com.facebook.presto.block.BlockAssertions.createLongsBlock;
 import static com.facebook.presto.block.BlockAssertions.createStringsBlock;
 import static com.facebook.presto.block.BlockAssertions.createTimestampsWithTimezoneBlock;
-import static com.facebook.presto.metadata.FunctionType.SCALAR;
+import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.TestSplit.createNormalSplit;
 import static com.facebook.presto.operator.scalar.FunctionAssertions.TestSplit.createRecordSetSplit;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -92,6 +95,7 @@ import static com.facebook.presto.spi.type.DateTimeEncoding.packDateTimeWithZone
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.sql.QueryUtil.mangleFieldReference;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.analyzeExpressionsWithSymbols;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
 import static com.facebook.presto.sql.planner.LocalExecutionPlanner.toTypes;
@@ -185,7 +189,7 @@ public final class FunctionAssertions
         return metadata;
     }
 
-    public FunctionAssertions addFunctions(List<ParametricFunction> functionInfos)
+    public FunctionAssertions addFunctions(List<SqlFunction> functionInfos)
     {
         metadata.addFunctions(functionInfos);
         return this;
@@ -417,6 +421,27 @@ public final class FunctionAssertions
 
                 return rewrittenExpression;
             }
+
+            @Override
+            public Expression rewriteDereferenceExpression(DereferenceExpression node, Void context, ExpressionTreeRewriter<Void> treeRewriter)
+            {
+                if (analysis.getColumnReferences().contains(node)) {
+                    return rewriteExpression(node, context, treeRewriter);
+                }
+
+                // Rewrite all row field reference to function call.
+                QualifiedName mangledName = QualifiedName.of(mangleFieldReference(node.getFieldName()));
+                FunctionCall functionCall = new FunctionCall(mangledName, ImmutableList.of(node.getBase()));
+                Expression rewrittenExpression = rewriteFunctionCall(functionCall, context, treeRewriter);
+
+                // cast expression if coercion is registered
+                Type coercion = analysis.getCoercion(node);
+                if (coercion != null) {
+                    rewrittenExpression = new Cast(rewrittenExpression, coercion.getTypeSignature().toString());
+                }
+
+                return rewrittenExpression;
+            }
         }, parsedExpression);
 
         return canonicalizeExpression(rewrittenExpression);
@@ -486,6 +511,7 @@ public final class FunctionAssertions
                 return null;
             }
         }, null);
+
         return hasQualifiedNameReference.get();
     }
 

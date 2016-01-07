@@ -50,6 +50,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 
 public class TestHiveIntegrationSmokeTest
         extends AbstractTestIntegrationSmokeTest
@@ -265,7 +266,7 @@ public class TestHiveIntegrationSmokeTest
                 "(" +
                 "  _varchar VARCHAR," +
                 "  _bigint BIGINT," +
-                "  _doube DOUBLE," +
+                "  _double DOUBLE," +
                 "  _boolean BOOLEAN" +
                 ") " +
                 "WITH (format = '" + storageFormat + "') ";
@@ -284,6 +285,14 @@ public class TestHiveIntegrationSmokeTest
         assertQuery("INSERT INTO test_insert_format_table " + select, "SELECT 1");
 
         assertQuery("SELECT * from test_insert_format_table", select);
+
+        assertQuery("INSERT INTO test_insert_format_table (_bigint, _double) SELECT 2, 14.3", "SELECT 1");
+
+        assertQuery("SELECT * from test_insert_format_table where _bigint = 2", "SELECT null, 2, 14.3, null");
+
+        assertQuery("INSERT INTO test_insert_format_table (_double, _bigint) SELECT 2.72, 3", "SELECT 1");
+
+        assertQuery("SELECT * from test_insert_format_table where _bigint = 3", "SELECT null, 3, 2.72, null");
 
         assertQueryTrue("DROP TABLE test_insert_format_table");
 
@@ -338,6 +347,79 @@ public class TestHiveIntegrationSmokeTest
         assertFalse(queryRunner.tableExists(getSession(), "test_insert_partitioned_table"));
     }
 
+    @Test
+    public void testDeleteFromUnpartitionedTable()
+            throws Exception
+    {
+        assertQuery("CREATE TABLE test_delete_unpartitioned (x bigint, y varchar)", "SELECT 1");
+
+        try {
+            queryRunner.execute("DELETE FROM test_delete_unpartitioned");
+            fail("expected exception");
+        }
+        catch (RuntimeException e) {
+            assertEquals(e.getMessage(), "This connector only supports delete where one or more partitions are deleted entirely");
+        }
+    }
+
+    @Test
+    public void testMetadataDelete()
+            throws Exception
+    {
+        for (HiveStorageFormat storageFormat : HiveStorageFormat.values()) {
+            testMetadataDelete(storageFormat);
+        }
+    }
+
+    private void testMetadataDelete(HiveStorageFormat storageFormat)
+            throws Exception
+    {
+        @Language("SQL") String createTable = "" +
+                "CREATE TABLE test_metadata_delete " +
+                "(" +
+                "  LINE_STATUS VARCHAR," +
+                "  LINE_NUMBER BIGINT," +
+                "  ORDER_KEY BIGINT" +
+                ") " +
+                "WITH (" +
+                STORAGE_FORMAT_PROPERTY + " = '" + storageFormat + "', " +
+                PARTITIONED_BY_PROPERTY + " = ARRAY[ 'LINE_NUMBER', 'LINE_STATUS' ]" +
+                ") ";
+
+        assertQuery(createTable, "SELECT 1");
+
+        // Hive will reorder the partition keys, so we must insert into the table assuming the partition keys have been moved to the end
+        assertQuery("" +
+                        "INSERT INTO test_metadata_delete " +
+                        "SELECT orderkey, linenumber, linestatus " +
+                        "FROM tpch.tiny.lineitem",
+                "SELECT count(*) from lineitem");
+
+        // Delete returns number of rows deleted, or null if obtaining the number is hard or impossible.
+        // Currently, Hive implementation always returns null.
+        assertQuery("DELETE FROM test_metadata_delete WHERE LINE_STATUS='F' and LINE_NUMBER=3", "SELECT null");
+
+        assertQuery("SELECT * from test_metadata_delete", "SELECT orderkey, linenumber, linestatus FROM lineitem WHERE linestatus<>'F' or linenumber<>3");
+
+        assertQuery("DELETE FROM test_metadata_delete WHERE LINE_STATUS='O'", "SELECT null");
+
+        assertQuery("SELECT * from test_metadata_delete", "SELECT orderkey, linenumber, linestatus FROM lineitem WHERE linestatus<>'O' and linenumber<>3");
+
+        try {
+            queryRunner.execute("DELETE FROM test_metadata_delete WHERE ORDER_KEY=1");
+            fail("expected exception");
+        }
+        catch (RuntimeException e) {
+            assertEquals(e.getMessage(), "This connector only supports delete where one or more partitions are deleted entirely");
+        }
+
+        assertQuery("SELECT * from test_metadata_delete", "SELECT orderkey, linenumber, linestatus FROM lineitem WHERE linestatus<>'O' and linenumber<>3");
+
+        assertQueryTrue("DROP TABLE test_metadata_delete");
+
+        assertFalse(queryRunner.tableExists(getSession(), "test_metadata_delete"));
+    }
+
     private TableMetadata getTableMetadata(String tableName)
     {
         Session session = getSession();
@@ -356,7 +438,7 @@ public class TestHiveIntegrationSmokeTest
 
         List<TableLayoutResult> layouts = metadata.getLayouts(session, tableHandle.get(), Constraint.alwaysTrue(), Optional.empty());
         TableLayout layout = Iterables.getOnlyElement(layouts).getLayout();
-        List<HivePartition> partitions = ((HiveTableLayoutHandle) layout.getHandle().getConnectorHandle()).getPartitions();
+        List<HivePartition> partitions = ((HiveTableLayoutHandle) layout.getHandle().getConnectorHandle()).getPartitions().get();
         return partitions;
     }
 

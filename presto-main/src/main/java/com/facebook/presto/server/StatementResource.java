@@ -23,6 +23,7 @@ import com.facebook.presto.client.StageStats;
 import com.facebook.presto.client.StatementStats;
 import com.facebook.presto.execution.BufferInfo;
 import com.facebook.presto.execution.QueryId;
+import com.facebook.presto.execution.QueryIdGenerator;
 import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.execution.QueryState;
@@ -119,6 +120,7 @@ public class StatementResource
     private final AccessControl accessControl;
     private final SessionPropertyManager sessionPropertyManager;
     private final ExchangeClientSupplier exchangeClientSupplier;
+    private final QueryIdGenerator queryIdGenerator;
 
     private final ConcurrentMap<QueryId, Query> queries = new ConcurrentHashMap<>();
     private final ScheduledExecutorService queryPurger = newSingleThreadScheduledExecutor(threadsNamed("query-purger"));
@@ -128,12 +130,14 @@ public class StatementResource
             QueryManager queryManager,
             AccessControl accessControl,
             SessionPropertyManager sessionPropertyManager,
-            ExchangeClientSupplier exchangeClientSupplier)
+            ExchangeClientSupplier exchangeClientSupplier,
+            QueryIdGenerator queryIdGenerator)
     {
         this.queryManager = requireNonNull(queryManager, "queryManager is null");
         this.accessControl = requireNonNull(accessControl, "accessControl is null");
         this.sessionPropertyManager = requireNonNull(sessionPropertyManager, "sessionPropertyManager is null");
         this.exchangeClientSupplier = requireNonNull(exchangeClientSupplier, "exchangeClientSupplier is null");
+        this.queryIdGenerator = requireNonNull(queryIdGenerator, "queryIdGenerator is null");
 
         queryPurger.scheduleWithFixedDelay(new PurgeQueriesRunnable(queries, queryManager), 200, 200, MILLISECONDS);
     }
@@ -154,7 +158,7 @@ public class StatementResource
     {
         assertRequest(!isNullOrEmpty(statement), "SQL statement is empty");
 
-        Session session = createSessionForRequest(servletRequest, accessControl, sessionPropertyManager);
+        Session session = createSessionForRequest(servletRequest, accessControl, sessionPropertyManager, queryIdGenerator.createNextQueryId());
 
         ExchangeClient exchangeClient = exchangeClientSupplier.get(deltaMemoryInBytes -> { });
         Query query = new Query(session, statement, queryManager, exchangeClient);
@@ -339,7 +343,10 @@ public class StatementResource
                     (columns.size() == 1) && (columns.get(0).getType().equals(StandardTypes.BIGINT))) {
                 Iterator<List<Object>> iterator = data.iterator();
                 if (iterator.hasNext()) {
-                    updateCount = ((Number) iterator.next().get(0)).longValue();
+                    Number number = (Number) iterator.next().get(0);
+                    if (number != null) {
+                        updateCount = number.longValue();
+                    }
                 }
             }
 

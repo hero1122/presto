@@ -71,6 +71,12 @@ public class AggregationOperator
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new AggregationOperatorFactory(operatorId, step, accumulatorFactories);
+        }
     }
 
     private enum State
@@ -190,6 +196,8 @@ public class AggregationOperator
 
         private Aggregator(AccumulatorFactory accumulatorFactory, Step step)
         {
+            checkArgument(step != Step.INTERMEDIATE, "intermediate aggregation not supported");
+
             if (step == Step.FINAL) {
                 checkArgument(accumulatorFactory.getInputChannels().size() == 1, "expected 1 input channel for intermediate aggregation");
                 intermediateChannel = accumulatorFactory.getInputChannels().get(0);

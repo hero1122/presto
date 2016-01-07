@@ -119,8 +119,7 @@ public class JoinCompiler
         Class<? extends LookupSource> lookupSourceClass = IsolatedClass.isolateClass(
                 new DynamicClassLoader(getClass().getClassLoader()),
                 LookupSource.class,
-                InMemoryJoinHash.class,
-                InMemoryJoinHash.UnvisitedJoinPositionIterator.class);
+                InMemoryJoinHash.class);
 
         return new LookupSourceFactory(lookupSourceClass, new PagesHashStrategyFactory(pagesHashStrategyClass));
     }
@@ -251,10 +250,10 @@ public class JoinCompiler
 
     private static void generateGetSizeInBytesMethod(ClassDefinition classDefinition, FieldDefinition sizeField)
     {
-        MethodDefinition method = classDefinition.declareMethod(a(PUBLIC), "getSizeInBytes", type(long.class));
+        MethodDefinition getSizeInBytesMethod = classDefinition.declareMethod(a(PUBLIC), "getSizeInBytes", type(long.class));
 
-        Variable thisVariable = method.getThis();
-        method.getBody()
+        Variable thisVariable = getSizeInBytesMethod.getThis();
+        getSizeInBytesMethod.getBody()
                 .append(thisVariable.getField(sizeField))
                 .retLong();
     }
@@ -265,10 +264,10 @@ public class JoinCompiler
         Parameter blockPosition = arg("blockPosition", int.class);
         Parameter pageBuilder = arg("pageBuilder", PageBuilder.class);
         Parameter outputChannelOffset = arg("outputChannelOffset", int.class);
-        MethodDefinition method = classDefinition.declareMethod(a(PUBLIC), "appendTo", type(void.class), blockIndex, blockPosition, pageBuilder, outputChannelOffset);
+        MethodDefinition appendToMethod = classDefinition.declareMethod(a(PUBLIC), "appendTo", type(void.class), blockIndex, blockPosition, pageBuilder, outputChannelOffset);
 
-        Variable thisVariable = method.getThis();
-        ByteCodeBlock appendToBody = method.getBody();
+        Variable thisVariable = appendToMethod.getThis();
+        ByteCodeBlock appendToBody = appendToMethod.getBody();
 
         for (int index = 0; index < channelFields.size(); index++) {
             Type type = types.get(index);
@@ -357,10 +356,10 @@ public class JoinCompiler
     {
         Parameter position = arg("position", int.class);
         Parameter blocks = arg("blocks", Block[].class);
-        MethodDefinition hashPositionMethod = classDefinition.declareMethod(a(PUBLIC), "hashRow", type(int.class), position, blocks);
+        MethodDefinition hashRowMethod = classDefinition.declareMethod(a(PUBLIC), "hashRow", type(int.class), position, blocks);
 
-        Variable resultVariable = hashPositionMethod.getScope().declareVariable(int.class, "result");
-        hashPositionMethod.getBody().push(0).putVariable(resultVariable);
+        Variable resultVariable = hashRowMethod.getScope().declareVariable(int.class, "result");
+        hashRowMethod.getBody().push(0).putVariable(resultVariable);
 
         for (int index = 0; index < joinChannelTypes.size(); index++) {
             ByteCodeExpression type = constantType(callSiteBinder, joinChannelTypes.get(index));
@@ -368,7 +367,7 @@ public class JoinCompiler
             // todo is the case needed
             ByteCodeExpression block = blocks.getElement(index).cast(Block.class);
 
-            hashPositionMethod
+            hashRowMethod
                     .getBody()
                     .getVariable(resultVariable)
                     .push(31)
@@ -378,7 +377,7 @@ public class JoinCompiler
                     .putVariable(resultVariable);
         }
 
-        hashPositionMethod
+        hashRowMethod
                 .getBody()
                 .getVariable(resultVariable)
                 .retInt();
@@ -397,7 +396,7 @@ public class JoinCompiler
             CallSiteBinder callSiteBinder,
             List<Type> joinChannelTypes)
     {
-        MethodDefinition hashPositionMethod = classDefinition.declareMethod(
+        MethodDefinition rowEqualsRowMethod = classDefinition.declareMethod(
                 a(PUBLIC),
                 "rowEqualsRow",
                 type(boolean.class),
@@ -406,7 +405,7 @@ public class JoinCompiler
                 arg("rightPosition", int.class),
                 arg("rightBlocks", Block[].class));
 
-        Scope compilerContext = hashPositionMethod.getScope();
+        Scope compilerContext = rowEqualsRowMethod.getScope();
         for (int index = 0; index < joinChannelTypes.size(); index++) {
             ByteCodeExpression type = constantType(callSiteBinder, joinChannelTypes.get(index));
 
@@ -419,7 +418,7 @@ public class JoinCompiler
                     .getElement(index);
 
             LabelNode checkNextField = new LabelNode("checkNextField");
-            hashPositionMethod
+            rowEqualsRowMethod
                     .getBody()
                     .append(typeEquals(
                             type,
@@ -433,7 +432,7 @@ public class JoinCompiler
                     .visitLabel(checkNextField);
         }
 
-        hashPositionMethod
+        rowEqualsRowMethod
                 .getBody()
                 .push(true)
                 .retInt();
@@ -449,7 +448,7 @@ public class JoinCompiler
         Parameter leftBlockPosition = arg("leftBlockPosition", int.class);
         Parameter rightPosition = arg("rightPosition", int.class);
         Parameter rightBlocks = arg("rightBlocks", Block[].class);
-        MethodDefinition hashPositionMethod = classDefinition.declareMethod(
+        MethodDefinition positionEqualsRowMethod = classDefinition.declareMethod(
                 a(PUBLIC),
                 "positionEqualsRow",
                 type(boolean.class),
@@ -458,7 +457,7 @@ public class JoinCompiler
                 rightPosition,
                 rightBlocks);
 
-        Variable thisVariable = hashPositionMethod.getThis();
+        Variable thisVariable = positionEqualsRowMethod.getThis();
 
         for (int index = 0; index < joinChannelTypes.size(); index++) {
             ByteCodeExpression type = constantType(callSiteBinder, joinChannelTypes.get(index));
@@ -471,7 +470,7 @@ public class JoinCompiler
             ByteCodeExpression rightBlock = rightBlocks.getElement(index);
 
             LabelNode checkNextField = new LabelNode("checkNextField");
-            hashPositionMethod
+            positionEqualsRowMethod
                     .getBody()
                     .append(typeEquals(type, leftBlock, leftBlockPosition, rightBlock, rightPosition))
                     .ifTrueGoto(checkNextField)
@@ -480,7 +479,7 @@ public class JoinCompiler
                     .visitLabel(checkNextField);
         }
 
-        hashPositionMethod
+        positionEqualsRowMethod
                 .getBody()
                 .push(true)
                 .retInt();
@@ -496,7 +495,7 @@ public class JoinCompiler
         Parameter leftBlockPosition = arg("leftBlockPosition", int.class);
         Parameter rightBlockIndex = arg("rightBlockIndex", int.class);
         Parameter rightBlockPosition = arg("rightBlockPosition", int.class);
-        MethodDefinition hashPositionMethod = classDefinition.declareMethod(
+        MethodDefinition positionEqualsPositionMethod = classDefinition.declareMethod(
                 a(PUBLIC),
                 "positionEqualsPosition",
                 type(boolean.class),
@@ -505,7 +504,7 @@ public class JoinCompiler
                 rightBlockIndex,
                 rightBlockPosition);
 
-        Variable thisVariable = hashPositionMethod.getThis();
+        Variable thisVariable = positionEqualsPositionMethod.getThis();
         for (int index = 0; index < joinChannelTypes.size(); index++) {
             ByteCodeExpression type = constantType(callSiteBinder, joinChannelTypes.get(index));
 
@@ -520,7 +519,7 @@ public class JoinCompiler
                     .cast(Block.class);
 
             LabelNode checkNextField = new LabelNode("checkNextField");
-            hashPositionMethod
+            positionEqualsPositionMethod
                     .getBody()
                     .append(typeEquals(type, leftBlock, leftBlockPosition, rightBlock, rightBlockPosition))
                     .ifTrueGoto(checkNextField)
@@ -529,7 +528,7 @@ public class JoinCompiler
                     .visitLabel(checkNextField);
         }
 
-        hashPositionMethod
+        positionEqualsPositionMethod
                 .getBody()
                 .push(true)
                 .retInt();

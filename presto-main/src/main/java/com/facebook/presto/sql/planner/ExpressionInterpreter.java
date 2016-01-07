@@ -14,7 +14,6 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.client.FailureInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorType;
@@ -24,14 +23,14 @@ import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.RecordCursor;
-import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.AnalysisContext;
 import com.facebook.presto.sql.analyzer.ExpressionAnalyzer;
+import com.facebook.presto.sql.analyzer.RelationType;
+import com.facebook.presto.sql.analyzer.SemanticErrorCode;
 import com.facebook.presto.sql.analyzer.SemanticException;
-import com.facebook.presto.sql.analyzer.TupleDescriptor;
 import com.facebook.presto.sql.planner.optimizations.CanonicalizeExpressions;
 import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
@@ -43,6 +42,7 @@ import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.DefaultTraversalVisitor;
+import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionRewriter;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
@@ -68,18 +68,14 @@ import com.facebook.presto.sql.tree.StringLiteral;
 import com.facebook.presto.sql.tree.SubscriptExpression;
 import com.facebook.presto.sql.tree.WhenClause;
 import com.facebook.presto.type.LikeFunctions;
-import com.facebook.presto.util.Failures;
 import com.facebook.presto.util.FastutilSetHelper;
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Functions;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import io.airlift.joni.Regex;
-import io.airlift.json.JsonCodec;
 import io.airlift.slice.Slice;
-import org.jetbrains.annotations.NotNull;
 
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
@@ -137,14 +133,16 @@ public class ExpressionInterpreter
         return new ExpressionInterpreter(expression, metadata, session, expressionTypes, true);
     }
 
-    public static Object evaluateConstantExpression(Expression expression, Type expectedType, Metadata metadata, Session session)
+    public static Object evaluateConstantExpression(Expression expression, Type expectedType, Metadata metadata, Session session, Set<Expression> columnReferences)
     {
+        requireNonNull(columnReferences, "columnReferences is null");
+
         ExpressionAnalyzer analyzer = createConstantAnalyzer(metadata, session);
-        analyzer.analyze(expression, new TupleDescriptor(), new AnalysisContext());
+        analyzer.analyze(expression, new RelationType(), new AnalysisContext());
 
         Type actualType = analyzer.getExpressionTypes().get(expression);
         if (!canCoerce(actualType, expectedType)) {
-            throw new PrestoException(StandardErrorCode.INVALID_SESSION_PROPERTY, String.format("Can not set property of type %s to %s",
+            throw new SemanticException(SemanticErrorCode.TYPE_MISMATCH, expression, String.format("Cannot cast type %s to %s",
                     expectedType.getTypeSignature(),
                     actualType.getTypeSignature()));
         }
@@ -152,14 +150,27 @@ public class ExpressionInterpreter
         IdentityHashMap<Expression, Type> coercions = new IdentityHashMap<>();
         coercions.putAll(analyzer.getExpressionCoercions());
         coercions.put(expression, expectedType);
-        return evaluateConstantExpression(expression, coercions, metadata, session);
+        return evaluateConstantExpression(expression, coercions, metadata, session, columnReferences);
     }
 
-    public static Object evaluateConstantExpression(Expression expression, IdentityHashMap<Expression, Type> coercions, Metadata metadata, Session session)
+    public static Object evaluateConstantExpression(Expression expression, IdentityHashMap<Expression, Type> coercions, Metadata metadata, Session session, Set<Expression> columnReferences)
     {
+        requireNonNull(columnReferences, "columnReferences is null");
+
         // verify expression is constant
         expression.accept(new DefaultTraversalVisitor<Void, Void>()
         {
+            @Override
+            protected Void visitDereferenceExpression(DereferenceExpression node, Void context)
+            {
+                if (columnReferences.contains(node)) {
+                    throw new SemanticException(EXPRESSION_NOT_CONSTANT, expression, "Constant expression cannot contain column references");
+                }
+
+                process(node.getBase(), context);
+                return null;
+            }
+
             @Override
             protected Void visitQualifiedNameReference(QualifiedNameReference node, Void context)
             {
@@ -198,7 +209,7 @@ public class ExpressionInterpreter
         // The optimization above may have rewritten the expression tree which breaks all the identity maps, so redo the analysis
         // to re-analyze coercions that might be necessary
         ExpressionAnalyzer analyzer = createConstantAnalyzer(metadata, session);
-        analyzer.analyze(canonicalized, new TupleDescriptor(), new AnalysisContext());
+        analyzer.analyze(canonicalized, new RelationType(), new AnalysisContext());
 
         // evaluate the expression
         Object result = expressionInterpreter(canonicalized, metadata, session, analyzer.getExpressionTypes()).evaluate(0);
@@ -298,6 +309,13 @@ public class ExpressionInterpreter
         }
 
         @Override
+        protected Object visitDereferenceExpression(DereferenceExpression node, Object context)
+        {
+            // Dereference is never a Symbol
+            return node;
+        }
+
+        @Override
         protected Object visitQualifiedNameReference(QualifiedNameReference node, Object context)
         {
             if (node.getName().getPrefix().isPresent()) {
@@ -381,9 +399,8 @@ public class ExpressionInterpreter
             }
             catch (RuntimeException e) {
                 // HACK
-                // Certain operations like 0 / 0 or likeExpression may throw exceptions.
-                // Wrap them a FunctionCall that will throw the exception if the expression is actually executed
-                return createFailureFunction(e, type(expression));
+                // Certain operations like 0 / 0 or likeExpression may throw exceptions
+                return expression;
             }
         }
 
@@ -484,8 +501,8 @@ public class ExpressionInterpreter
             // the analysis below. If the value is null, it means that we can't apply the HashSet
             // optimization
             if (!inListCache.containsKey(valueList)) {
-                if (Iterables.all(valueList.getValues(), ExpressionInterpreter::isNullLiteral)) {
-                    // if all elements are constant, create a set with them
+                if (valueList.getValues().stream().allMatch(Literal.class::isInstance) &&
+                        valueList.getValues().stream().noneMatch(NullLiteral.class::isInstance)) {
                     Set objectSet = valueList.getValues().stream().map(expression -> process(expression, context)).collect(Collectors.toSet());
                     set = FastutilSetHelper.toFastutilHashSet(objectSet, expressionTypes.get(node.getValue()), metadata.getFunctionRegistry());
                 }
@@ -1015,24 +1032,6 @@ public class ExpressionInterpreter
             }
             throw Throwables.propagate(throwable);
         }
-    }
-
-    @VisibleForTesting
-    @NotNull
-    public static Expression createFailureFunction(RuntimeException exception, Type type)
-    {
-        requireNonNull(exception, "Exception is null");
-
-        String failureInfo = JsonCodec.jsonCodec(FailureInfo.class).toJson(Failures.toFailure(exception).toFailureInfo());
-        FunctionCall jsonParse = new FunctionCall(QualifiedName.of("json_parse"), ImmutableList.of(new StringLiteral(failureInfo)));
-        FunctionCall failureFunction = new FunctionCall(QualifiedName.of("fail"), ImmutableList.of(jsonParse));
-
-        return new Cast(failureFunction, type.getTypeSignature().toString());
-    }
-
-    private static boolean isNullLiteral(Expression entry)
-    {
-        return entry instanceof Literal && !(entry instanceof NullLiteral);
     }
 
     private static boolean isArray(Type type)

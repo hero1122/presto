@@ -34,8 +34,9 @@ import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
-import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.predicate.NullableValue;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
@@ -67,6 +68,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -87,6 +89,7 @@ import static com.facebook.presto.metadata.ViewDefinition.ViewColumn;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_VIEW;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.StandardErrorCode.SYNTAX_ERROR;
+import static com.facebook.presto.spi.predicate.TupleDomain.extractFixedValues;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
@@ -241,13 +244,13 @@ public class MetadataManager
     }
 
     @Override
-    public List<ParametricFunction> listFunctions()
+    public List<SqlFunction> listFunctions()
     {
         return functions.list();
     }
 
     @Override
-    public void addFunctions(List<? extends ParametricFunction> functionInfos)
+    public void addFunctions(List<? extends SqlFunction> functionInfos)
     {
         functions.addFunctions(functionInfos);
     }
@@ -291,7 +294,7 @@ public class MetadataManager
         TupleDomain<ColumnHandle> summary = constraint.getSummary();
         String connectorId = table.getConnectorId();
         ConnectorTableHandle connectorTable = table.getConnectorHandle();
-        Predicate<Map<ColumnHandle, ?>> predicate = constraint.predicate();
+        Predicate<Map<ColumnHandle, NullableValue>> predicate = constraint.predicate();
 
         List<ConnectorTableLayoutResult> layouts;
         ConnectorMetadataEntry entry = getConnectorMetadata(connectorId);
@@ -304,7 +307,8 @@ public class MetadataManager
             ConnectorPartitionResult result = connectorSplitManager.getPartitions(connectorSession, connectorTable, summary);
 
             List<ConnectorPartition> partitions = result.getPartitions().stream()
-                    .filter(partition -> predicate.test(partition.getTupleDomain().extractFixedValues()))
+                    .filter(partition -> !partition.getTupleDomain().isNone())
+                    .filter(partition -> predicate.test(extractFixedValues(partition.getTupleDomain()).get()))
                     .collect(toImmutableList());
 
             List<TupleDomain<ColumnHandle>> partitionDomains = partitions.stream()
@@ -540,6 +544,23 @@ public class MetadataManager
     {
         ConnectorMetadataEntry entry = lookupConnectorFor(tableHandle);
         return entry.getMetadata().getUpdateRowIdColumnHandle(session.toConnectorSession(entry.getCatalog()), tableHandle.getConnectorHandle());
+    }
+
+    @Override
+    public boolean supportsMetadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    {
+        ConnectorMetadataEntry entry = lookupConnectorFor(tableHandle);
+        return entry.getMetadata().supportsMetadataDelete(
+                session.toConnectorSession(entry.getCatalog()),
+                tableHandle.getConnectorHandle(),
+                tableLayoutHandle.getConnectorHandle());
+    }
+
+    @Override
+    public OptionalLong metadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    {
+        ConnectorMetadataEntry entry = lookupConnectorFor(tableHandle);
+        return entry.getMetadata().metadataDelete(session.toConnectorSession(entry.getCatalog()), tableHandle.getConnectorHandle(), tableLayoutHandle.getConnectorHandle());
     }
 
     @Override

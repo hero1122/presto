@@ -41,6 +41,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.facebook.presto.hive.AbstractTestHiveClient.listAllDataPaths;
 import static com.facebook.presto.hive.HiveUtil.createPartitionName;
 import static com.facebook.presto.hive.metastore.HivePrivilege.OWNERSHIP;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableSet;
@@ -139,6 +140,8 @@ public class InMemoryHiveMetastore
     @Override
     public void dropTable(String databaseName, String tableName)
     {
+        List<String> locations = listAllDataPaths(this, databaseName, tableName);
+
         SchemaTableName schemaTableName = new SchemaTableName(databaseName, tableName);
         Table table = relations.remove(schemaTableName);
         if (table == null) {
@@ -150,11 +153,12 @@ public class InMemoryHiveMetastore
                 .forEach(partitions::remove);
 
         // remove data
-        String location = table.getSd().getLocation();
-        if (location != null) {
-            File directory = new File(URI.create(location));
-            checkArgument(isParentDir(directory, baseDirectory), "Table directory must be inside of the metastore base directory");
-            deleteRecursively(directory);
+        for (String location : locations) {
+            if (location != null) {
+                File directory = new File(URI.create(location));
+                checkArgument(isParentDir(directory, baseDirectory), "Table directory must be inside of the metastore base directory");
+                deleteRecursively(directory);
+            }
         }
     }
 
@@ -240,6 +244,16 @@ public class InMemoryHiveMetastore
             Partition partition = entry.getValue();
             if (partitionName.matches(databaseName, tableName) && partition.getValues().equals(parts)) {
                 partitions.remove(partitionName);
+            }
+        }
+    }
+
+    @Override
+    public void dropPartitionByName(String databaseName, String tableName, String partitionName)
+    {
+        for (PartitionName partition : partitions.keySet()) {
+            if (partition.matches(databaseName, tableName, partitionName)) {
+                partitions.remove(partition);
             }
         }
     }
@@ -401,6 +415,13 @@ public class InMemoryHiveMetastore
         {
             return this.schemaName.equals(schemaName) &&
                     this.tableName.equals(tableName);
+        }
+
+        public boolean matches(String schemaName, String tableName, String partitionName)
+        {
+            return this.schemaName.equals(schemaName) &&
+                    this.tableName.equals(tableName) &&
+                    this.partitionName.equals(partitionName);
         }
 
         @Override

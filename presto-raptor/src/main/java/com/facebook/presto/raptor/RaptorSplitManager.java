@@ -29,7 +29,7 @@ import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.collect.ImmutableList;
 import org.skife.jdbi.v2.ResultIterator;
 
@@ -40,6 +40,7 @@ import javax.inject.Inject;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +50,7 @@ import java.util.function.Supplier;
 
 import static com.facebook.presto.raptor.RaptorErrorCode.RAPTOR_NO_HOST_FOR_SHARD;
 import static com.facebook.presto.raptor.util.Types.checkType;
+import static com.facebook.presto.spi.NodeState.ACTIVE;
 import static com.facebook.presto.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -107,7 +109,7 @@ public class RaptorSplitManager
         RaptorPartition partition = checkType(getOnlyElement(partitions), RaptorPartition.class, "partition");
         TupleDomain<RaptorColumnHandle> effectivePredicate = toRaptorTupleDomain(partition.getEffectivePredicate());
 
-        return new RaptorSplitSource(raptorTableHandle.getTableId(), effectivePredicate);
+        return new RaptorSplitSource(raptorTableHandle.getTableId(), effectivePredicate, raptorTableHandle.getTransactionId());
     }
 
     private static List<HostAddress> getAddressesForNodes(Map<String, Node> nodeMap, Iterable<String> nodeIdentifiers)
@@ -137,18 +139,20 @@ public class RaptorSplitManager
     private class RaptorSplitSource
             implements ConnectorSplitSource
     {
-        private final Map<String, Node> nodesById = uniqueIndex(nodeManager.getActiveNodes(), Node::getNodeIdentifier);
+        private final Map<String, Node> nodesById = uniqueIndex(nodeManager.getNodes(ACTIVE), Node::getNodeIdentifier);
         private final long tableId;
         private final TupleDomain<RaptorColumnHandle> effectivePredicate;
+        private final OptionalLong transactionId;
         private final ResultIterator<ShardNodes> iterator;
 
         @GuardedBy("this")
         private CompletableFuture<List<ConnectorSplit>> future;
 
-        public RaptorSplitSource(long tableId, TupleDomain<RaptorColumnHandle> effectivePredicate)
+        public RaptorSplitSource(long tableId, TupleDomain<RaptorColumnHandle> effectivePredicate, OptionalLong transactionId)
         {
             this.tableId = tableId;
             this.effectivePredicate = requireNonNull(effectivePredicate, "effectivePredicate is null");
+            this.transactionId = requireNonNull(transactionId, "transactionId is null");
             this.iterator = new SynchronizedResultIterator<>(shardManager.getShardNodes(tableId, effectivePredicate));
         }
 
@@ -222,7 +226,7 @@ public class RaptorSplitManager
                 addresses = ImmutableList.of(node.getHostAndPort());
             }
 
-            return new RaptorSplit(connectorId, shardId, addresses, effectivePredicate);
+            return new RaptorSplit(connectorId, shardId, addresses, effectivePredicate, transactionId);
         }
     }
 }

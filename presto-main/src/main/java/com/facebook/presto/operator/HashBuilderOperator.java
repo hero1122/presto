@@ -87,6 +87,12 @@ public class HashBuilderOperator
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new HashBuilderOperatorFactory(operatorId, lookupSourceSupplier.getTypes(), hashChannels, hashChannel, expectedPositions);
+        }
     }
 
     private final OperatorContext operatorContext;
@@ -135,9 +141,8 @@ public class HashBuilderOperator
             return;
         }
 
-        // Free memory, as the SharedLookupSource is going to take it over
-        operatorContext.setMemoryReservation(0);
-        lookupSourceSupplier.setLookupSource(new SharedLookupSource(pagesIndex.createLookupSource(hashChannels, hashChannel), operatorContext.getDriverContext().getPipelineContext().getTaskContext()));
+        // After this point the SharedLookupSource will take over our memory reservation, and ours will be zero
+        lookupSourceSupplier.setLookupSource(new SharedLookupSource(pagesIndex.createLookupSource(hashChannels, hashChannel), operatorContext));
         finished = true;
     }
 

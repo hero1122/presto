@@ -15,7 +15,6 @@ package com.facebook.presto.metadata;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
-import com.facebook.presto.block.BlockUtils;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
@@ -30,6 +29,7 @@ import com.facebook.presto.type.ArrayType;
 import com.facebook.presto.type.MapType;
 import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Ordering;
 import io.airlift.json.JsonCodec;
 import io.airlift.json.JsonCodecFactory;
@@ -47,6 +47,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_SESSION_PROPERTY;
+import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 import static com.facebook.presto.sql.planner.ExpressionInterpreter.evaluateConstantExpression;
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -189,11 +190,11 @@ public final class SessionPropertyManager
     @NotNull
     public static Object evaluatePropertyValue(Expression expression, Type expectedType, Session session, Metadata metadata)
     {
-        Object value = evaluateConstantExpression(expression, expectedType, metadata, session);
+        Object value = evaluateConstantExpression(expression, expectedType, metadata, session, ImmutableSet.of());
 
         // convert to object value type of SQL type
         BlockBuilder blockBuilder = expectedType.createBlockBuilder(new BlockBuilderStatus(), 1);
-        BlockUtils.appendObject(expectedType, blockBuilder, value);
+        writeNativeValue(expectedType, blockBuilder, value);
         Object objectValue = expectedType.getObjectValue(session.toConnectorSession(), blockBuilder, 0);
 
         if (objectValue == null) {

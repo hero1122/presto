@@ -22,12 +22,11 @@ import com.facebook.presto.hive.parquet.ParquetRecordCursorProvider;
 import com.facebook.presto.hive.rcfile.RcFilePageSourceFactory;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.testing.TestingConnectorSession;
 import com.facebook.presto.type.ArrayType;
 import com.facebook.presto.type.RowType;
 import com.google.common.base.Joiner;
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import org.apache.hadoop.conf.Configuration;
@@ -309,7 +308,7 @@ public class TestHiveFileFormats
         return TEST_COLUMNS.stream()
                 .filter(column -> !ImmutableSet.of("t_array_empty", "t_map_null_key", "t_map_null_key_complex_value", "t_map_null_key_complex_key_value")
                         .contains(column.getName()))
-                .filter(column -> !hasType(column.getObjectInspector(), PrimitiveCategory.DATE))
+                .filter(column -> column.isPartitionKey() || !hasType(column.getObjectInspector(), PrimitiveCategory.DATE))
                 .collect(toList());
     }
 
@@ -368,14 +367,9 @@ public class TestHiveFileFormats
     public void testDwrf()
             throws Exception
     {
-        List<TestColumn> testColumns = ImmutableList.copyOf(filter(TEST_COLUMNS, new Predicate<TestColumn>()
-        {
-            @Override
-            public boolean apply(TestColumn testColumn)
-            {
-                ObjectInspector objectInspector = testColumn.getObjectInspector();
-                return !hasType(objectInspector, PrimitiveCategory.DATE);
-            }
+        List<TestColumn> testColumns = ImmutableList.copyOf(filter(TEST_COLUMNS, testColumn -> {
+            ObjectInspector objectInspector = testColumn.getObjectInspector();
+            return !hasType(objectInspector, PrimitiveCategory.DATE);
         }));
 
         HiveOutputFormat<?, ?> outputFormat = new com.facebook.hive.orc.OrcOutputFormat();
@@ -398,15 +392,9 @@ public class TestHiveFileFormats
     public void testDwrfDataStream()
             throws Exception
     {
-        List<TestColumn> testColumns = ImmutableList.copyOf(filter(TEST_COLUMNS, new Predicate<TestColumn>()
-        {
-            @Override
-            public boolean apply(TestColumn testColumn)
-            {
-                ObjectInspector objectInspector = testColumn.getObjectInspector();
-                return !hasType(objectInspector, PrimitiveCategory.DATE);
-            }
-
+        List<TestColumn> testColumns = ImmutableList.copyOf(filter(TEST_COLUMNS, testColumn -> {
+            ObjectInspector objectInspector = testColumn.getObjectInspector();
+            return !hasType(objectInspector, PrimitiveCategory.DATE);
         }));
 
         HiveOutputFormat<?, ?> outputFormat = new com.facebook.hive.orc.OrcOutputFormat();

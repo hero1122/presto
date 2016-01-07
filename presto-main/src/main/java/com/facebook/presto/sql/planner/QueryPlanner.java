@@ -18,13 +18,13 @@ import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.TupleDomain;
 import com.facebook.presto.spi.block.SortOrder;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.analyzer.Analysis;
 import com.facebook.presto.sql.analyzer.Field;
 import com.facebook.presto.sql.analyzer.FieldOrExpression;
-import com.facebook.presto.sql.analyzer.TupleDescriptor;
+import com.facebook.presto.sql.analyzer.RelationType;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.DeleteNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
@@ -72,9 +72,10 @@ import java.util.Set;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableSet;
+import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
 
 class QueryPlanner
@@ -182,7 +183,7 @@ class QueryPlanner
 
     public DeleteNode planDelete(Delete node)
     {
-        TupleDescriptor descriptor = analysis.getOutputDescriptor(node.getTable());
+        RelationType descriptor = analysis.getOutputDescriptor(node.getTable());
         TableHandle handle = analysis.getTableHandle(node.getTable());
         ColumnHandle rowIdHandle = metadata.getUpdateRowIdColumnHandle(session, handle);
         Type rowIdType = metadata.getColumnMetadata(session, handle, rowIdHandle).getType();
@@ -207,7 +208,7 @@ class QueryPlanner
 
         // create table scan
         PlanNode tableScan = new TableScanNode(idAllocator.getNextId(), handle, outputSymbols.build(), columns.build(), Optional.empty(), TupleDomain.all(), null);
-        RelationPlan relationPlan = new RelationPlan(tableScan, new TupleDescriptor(fields.build()), outputSymbols.build(), Optional.empty());
+        RelationPlan relationPlan = new RelationPlan(tableScan, new RelationType(fields.build()), outputSymbols.build(), Optional.empty());
 
         TranslationMap translations = new TranslationMap(relationPlan, analysis);
         translations.setFieldMappings(relationPlan.getOutputSymbols());
@@ -236,7 +237,7 @@ class QueryPlanner
         List<Expression> emptyRow = ImmutableList.of();
         return new RelationPlan(
                 new ValuesNode(idAllocator.getNextId(), ImmutableList.<Symbol>of(), ImmutableList.of(emptyRow)),
-                new TupleDescriptor(),
+                new RelationType(),
                 ImmutableList.<Symbol>of(),
                 Optional.empty());
     }
@@ -256,7 +257,7 @@ class QueryPlanner
         TranslationMap outputTranslations = new TranslationMap(subPlan.getRelationPlan(), analysis);
 
         ImmutableMap.Builder<Symbol, Expression> projections = ImmutableMap.builder();
-        for (FieldOrExpression fieldOrExpression : ImmutableSet.copyOf(expressions)) {
+        for (FieldOrExpression fieldOrExpression : expressions) {
             Symbol symbol;
 
             if (fieldOrExpression.isFieldReference()) {
@@ -339,18 +340,24 @@ class QueryPlanner
 
     private PlanBuilder aggregate(PlanBuilder subPlan, QuerySpecification node)
     {
-        if (analysis.getAggregates(node).isEmpty() && analysis.getGroupByExpressions(node).isEmpty()) {
+        List<List<FieldOrExpression>> groupingSets = analysis.getGroupingSets(node);
+        if (groupingSets.isEmpty()) {
             return subPlan;
         }
 
-        Set<FieldOrExpression> arguments = analysis.getAggregates(node).stream()
+        return aggregateGroupingSet(getOnlyElement(groupingSets), subPlan, node);
+    }
+
+    private PlanBuilder aggregateGroupingSet(List<FieldOrExpression> groupingSet, PlanBuilder subPlan, QuerySpecification node)
+    {
+        List<FieldOrExpression> arguments = analysis.getAggregates(node).stream()
                 .map(FunctionCall::getArguments)
                 .flatMap(List::stream)
                 .map(FieldOrExpression::new)
-                .collect(toImmutableSet());
+                .collect(toImmutableList());
 
         // 1. Pre-project all scalar inputs (arguments and non-trivial group by expressions)
-        Iterable<FieldOrExpression> inputs = Iterables.concat(analysis.getGroupByExpressions(node), arguments);
+        Iterable<FieldOrExpression> inputs = Iterables.concat(groupingSet, arguments);
         if (!Iterables.isEmpty(inputs)) { // avoid an empty projection if the only aggregation is COUNT (which has no arguments)
             subPlan = project(subPlan, inputs);
         }
@@ -380,7 +387,7 @@ class QueryPlanner
 
         // 2.b. Rewrite group by expressions in terms of pre-projected inputs
         Set<Symbol> groupBySymbols = new LinkedHashSet<>();
-        for (FieldOrExpression fieldOrExpression : analysis.getGroupByExpressions(node)) {
+        for (FieldOrExpression fieldOrExpression : groupingSet) {
             Symbol symbol = subPlan.translate(fieldOrExpression);
             groupBySymbols.add(symbol);
             translations.put(fieldOrExpression, symbol);
@@ -397,7 +404,7 @@ class QueryPlanner
             Symbol aggregateSymbol = translations.get(aggregate);
             if (marker == null) {
                 if (args.size() == 1) {
-                    marker = symbolAllocator.newSymbol(Iterables.getOnlyElement(args), BOOLEAN, "distinct");
+                    marker = symbolAllocator.newSymbol(getOnlyElement(args), BOOLEAN, "distinct");
                 }
                 else {
                     marker = symbolAllocator.newSymbol(aggregateSymbol.getName(), BOOLEAN, "distinct");
@@ -445,7 +452,7 @@ class QueryPlanner
         // Add back the implicit casts that we removed in 2.a
         // TODO: this is a hack, we should change type coercions to coerce the inputs to functions/operators instead of coercing the output
         if (needPostProjectionCoercion) {
-            return explicitCoercionFields(subPlan, analysis.getGroupByExpressions(node), analysis.getAggregates(node));
+            return explicitCoercionFields(subPlan, groupingSet, analysis.getAggregates(node));
         }
         return subPlan;
     }
@@ -614,7 +621,7 @@ class QueryPlanner
      * 2) Create a new SemiJoinNode that connects the semijoin lookup field with the planned subquery and have it output a new boolean
      * symbol for the result of the semijoin.
      * 3) Add an entry to the TranslationMap that notes to map the InPredicate into semijoin output symbol
-     * <p/>
+     * <p>
      * Currently, we only support semijoins deriving from InPredicates, but we will probably need
      * to add support for more SQL constructs in the future.
      */
@@ -630,7 +637,7 @@ class QueryPlanner
         SubqueryExpression subqueryExpression = (SubqueryExpression) inPredicate.getValueList();
         RelationPlanner relationPlanner = new RelationPlanner(analysis, symbolAllocator, idAllocator, metadata, session);
         RelationPlan valueListRelation = relationPlanner.process(subqueryExpression.getQuery(), null);
-        Symbol filteringSourceJoinSymbol = Iterables.getOnlyElement(valueListRelation.getRoot().getOutputSymbols());
+        Symbol filteringSourceJoinSymbol = getOnlyElement(valueListRelation.getRoot().getOutputSymbols());
 
         Symbol semiJoinOutputSymbol = symbolAllocator.newSymbol("semijoinresult", BOOLEAN);
 

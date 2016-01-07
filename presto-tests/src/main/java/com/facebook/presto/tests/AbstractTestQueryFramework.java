@@ -53,7 +53,7 @@ public abstract class AbstractTestQueryFramework
     }
 
     @AfterClass(alwaysRun = true)
-    private void close()
+    public void close()
             throws Exception
     {
         try {
@@ -129,7 +129,13 @@ public abstract class AbstractTestQueryFramework
     protected void assertQueryTrue(@Language("SQL") String sql)
             throws Exception
     {
-        assertQuery(sql, "SELECT true");
+        assertQueryTrue(getSession(), sql);
+    }
+
+    protected void assertQueryTrue(Session session, @Language("SQL") String sql)
+            throws Exception
+    {
+        assertQuery(session, sql, "SELECT true");
     }
 
     public void assertApproximateQuery(Session session, @Language("SQL") String actual, @Language("SQL") String expected)
@@ -205,14 +211,9 @@ public abstract class AbstractTestQueryFramework
 
     public Function<MaterializedRow, String> onlyColumnGetter()
     {
-        return new Function<MaterializedRow, String>()
-        {
-            @Override
-            public String apply(MaterializedRow input)
-            {
-                assertEquals(input.getFieldCount(), 1);
-                return (String) input.getField(0);
-            }
+        return input -> {
+            assertEquals(input.getFieldCount(), 1);
+            return (String) input.getField(0);
         };
     }
 

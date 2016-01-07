@@ -20,14 +20,15 @@ import com.facebook.presto.spi.ConnectorSplitSource;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.Node;
 import com.facebook.presto.spi.NodeManager;
+import com.facebook.presto.spi.NodeState;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.NullableValue;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import io.airlift.slice.Slices;
 import org.testng.annotations.Test;
 
 import java.net.URI;
@@ -38,6 +39,7 @@ import java.util.concurrent.ExecutionException;
 
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
+import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.String.format;
 import static java.lang.management.ManagementFactory.getPlatformMBeanServer;
 import static java.util.stream.Collectors.toSet;
@@ -60,7 +62,7 @@ public class TestJmxSplitManager
     {
         for (Node node : nodes) {
             String nodeIdentifier = node.getNodeIdentifier();
-            TupleDomain<ColumnHandle> nodeTupleDomain = TupleDomain.withFixedValues(ImmutableMap.of(columnHandle, Slices.utf8Slice(nodeIdentifier)));
+            TupleDomain<ColumnHandle> nodeTupleDomain = TupleDomain.fromFixedValues(ImmutableMap.of(columnHandle, NullableValue.of(VARCHAR, utf8Slice(nodeIdentifier))));
 
             ConnectorPartitionResult connectorPartitionResult = splitManager.getPartitions(SESSION, tableHandle, nodeTupleDomain);
             ConnectorSplitSource splitSource = splitManager.getPartitionSplits(SESSION, tableHandle, connectorPartitionResult.getPartitions());
@@ -131,7 +133,7 @@ public class TestJmxSplitManager
             implements NodeManager
     {
         @Override
-        public Set<Node> getActiveNodes()
+        public Set<Node> getNodes(NodeState state)
         {
             return nodes;
         }

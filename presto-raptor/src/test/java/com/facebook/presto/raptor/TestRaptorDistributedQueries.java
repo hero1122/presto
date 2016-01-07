@@ -75,10 +75,11 @@ public class TestRaptorDistributedQueries
         }
     }
 
-    @Override
-    public void testAddColumn()
+    @Test
+    public void testTableProperties()
             throws Exception
     {
-        // Raptor currently does not support add column
+        computeActual("CREATE TABLE test_table_properties_1 (foo BIGINT, bar BIGINT, ds DATE) WITH (ordering=array['foo','bar'], temporal_column='ds')");
+        computeActual("CREATE TABLE test_table_properties_2 (foo BIGINT, bar BIGINT, ds DATE) WITH (ORDERING=array['foo','bar'], TEMPORAL_COLUMN='ds')");
     }
 }
